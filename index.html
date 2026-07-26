@@ -131,7 +131,7 @@
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(container.clientWidth, container.clientHeight);
-    renderer.xr.enabled = true; // Enable WebXR on renderer
+    renderer.xr.enabled = true;
     container.appendChild(renderer.domElement);
 
     const orbit = new THREE.OrbitControls(camera, renderer.domElement);
@@ -156,7 +156,7 @@
     dirLight.position.set(5, 10, 5);
     scene.add(dirLight);
 
-    // Set up Player Rig for WebXR VR mode
+    // Set up Player Rig for VR Mode
     const playerRig = new THREE.Group();
     scene.add(playerRig);
     playerRig.add(camera);
@@ -330,7 +330,7 @@
       reader.readAsText(file);
     }
 
-    // DIRECT WEBXR PLAY IN VR MODE
+    // WEBXR PLAY IN VR MODE (Includes Hand Tracking)
     async function playInVR() {
       if (!navigator.xr) {
         showEnginePopup("WebXR is not supported on this device/browser.");
@@ -352,6 +352,7 @@
         playerRig.rotation.set(0, 0, 0);
       }
 
+      verticalVelocity = 0; // Reset gravity speed when entering VR
       transformGizmo.detach();
 
       try {
@@ -369,37 +370,104 @@
       }
     }
 
+    // VR PHYSICS & MOVEMENT CONTROLS
     let lastSnapTurn = 0;
-    function handleVRMovement() {
+    let verticalVelocity = 0;
+    const gravity = 9.8; // Gravity acceleration
+
+    function handleVRPhysicsAndMovement(delta) {
       const session = renderer.xr.getSession();
       if (!session) return;
 
+      // 1. Controller Thumbstick Movement & Snap Turning
       for (const source of session.inputSources) {
-        if (!source.gamepad) continue;
-        const axes = source.gamepad.axes;
+        if (source.gamepad) {
+          const axes = source.gamepad.axes;
 
-        if (source.handedness === 'left' && axes.length >= 4) {
-          const xAxis = axes[2] || axes[0];
-          const zAxis = axes[3] || axes[1];
+          // Left Controller Move
+          if (source.handedness === 'left' && axes.length >= 4) {
+            const xAxis = axes[2] || axes[0];
+            const zAxis = axes[3] || axes[1];
 
-          if (Math.abs(xAxis) > 0.1 || Math.abs(zAxis) > 0.1) {
-            const moveSpeed = 0.05;
-            const moveVector = new THREE.Vector3(xAxis, 0, zAxis);
-            const headRotation = new THREE.Euler(0, 0, 0, 'YXZ');
-            headRotation.setFromQuaternion(camera.quaternion);
-            moveVector.applyEuler(new THREE.Euler(0, headRotation.y + playerRig.rotation.y, 0));
-            playerRig.position.addScaledVector(moveVector, moveSpeed);
+            if (Math.abs(xAxis) > 0.1 || Math.abs(zAxis) > 0.1) {
+              const moveSpeed = 2.5 * delta;
+              const moveVector = new THREE.Vector3(xAxis, 0, zAxis);
+              const headRotation = new THREE.Euler(0, 0, 0, 'YXZ');
+              headRotation.setFromQuaternion(camera.quaternion);
+              moveVector.applyEuler(new THREE.Euler(0, headRotation.y + playerRig.rotation.y, 0));
+              playerRig.position.addScaledVector(moveVector, moveSpeed);
+            }
+          }
+
+          // Right Controller Snap Turn
+          if (source.handedness === 'right' && axes.length >= 4) {
+            const xAxis = axes[2] || axes[0];
+            const now = performance.now();
+            if (Math.abs(xAxis) > 0.6 && now - lastSnapTurn > 300) {
+              playerRig.rotation.y -= Math.sign(xAxis) * (Math.PI / 4);
+              lastSnapTurn = now;
+            }
           }
         }
 
-        if (source.handedness === 'right' && axes.length >= 4) {
-          const xAxis = axes[2] || axes[0];
-          const now = performance.now();
-          if (Math.abs(xAxis) > 0.6 && now - lastSnapTurn > 300) {
-            playerRig.rotation.y -= Math.sign(xAxis) * (Math.PI / 4);
-            lastSnapTurn = now;
+        // 2. Hand Tracking Movement (Left Hand Middle Finger + Thumb Pinch)
+        if (source.hand && source.handedness === 'left') {
+          const thumbTip = source.hand.get('thumb-tip');
+          const middleTip = source.hand.get('middle-finger-tip');
+
+          if (thumbTip && middleTip) {
+            const frame = renderer.xr.getFrame();
+            const referenceSpace = renderer.xr.getReferenceSpace();
+
+            if (frame && referenceSpace) {
+              const thumbPose = frame.getJointPose(thumbTip, referenceSpace);
+              const middlePose = frame.getJointPose(middleTip, referenceSpace);
+
+              if (thumbPose && middlePose) {
+                const tPos = thumbPose.transform.position;
+                const mPos = middlePose.transform.position;
+
+                // Calculate distance between thumb and middle finger tip
+                const dx = tPos.x - mPos.x;
+                const dy = tPos.y - mPos.y;
+                const dz = tPos.z - mPos.z;
+                const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+                // If thumb and middle finger are pinching (distance < 3 cm)
+                if (distance < 0.03) {
+                  const moveSpeed = 2.0 * delta;
+                  const dir = new THREE.Vector3();
+                  camera.getWorldDirection(dir);
+                  dir.y = 0; // Keep movement on horizontal plane
+                  dir.normalize();
+                  playerRig.position.addScaledVector(dir, moveSpeed);
+                }
+              }
+            }
           }
         }
+      }
+
+      // 3. Gravity & Ground Collision
+      verticalVelocity -= gravity * delta;
+      playerRig.position.y += verticalVelocity * delta;
+
+      // Check collision with scene objects or floor (y = 0)
+      const downRay = new THREE.Raycaster(
+        new THREE.Vector3(playerRig.position.x, playerRig.position.y + 1, playerRig.position.z),
+        new THREE.Vector3(0, -1, 0)
+      );
+
+      const intersects = downRay.intersectObjects(gameObjects, true);
+      let groundHeight = 0;
+
+      if (intersects.length > 0) {
+        groundHeight = intersects[0].point.y;
+      }
+
+      if (playerRig.position.y <= groundHeight) {
+        playerRig.position.y = groundHeight;
+        verticalVelocity = 0;
       }
     }
 
@@ -561,10 +629,14 @@
       );
     }
 
-    // Animation Loop with WebXR Rendering
+    // Main Loop with Delta Time calculation
+    const clock = new THREE.Clock();
+
     renderer.setAnimationLoop(() => {
+      const delta = clock.getDelta();
+
       if (renderer.xr.isPresenting) {
-        handleVRMovement();
+        handleVRPhysicsAndMovement(delta);
       } else {
         orbit.update();
       }
