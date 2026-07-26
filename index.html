@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>AJG ENGINE v1.8</title>
+  <title>AJG ENGINE v1.9</title>
   <!-- Three.js, OrbitControls, TransformControls, and WebXR Button -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
@@ -67,7 +67,7 @@
 <body>
 
   <div id="toolbar">
-    <div class="brand-title">⚡ AJG ENGINE <span class="brand-badge">v1.8</span></div>
+    <div class="brand-title">⚡ AJG ENGINE <span class="brand-badge">v1.9</span></div>
     <div style="height:16px; width:1px; background:#444;"></div>
     
     <button class="btn btn-action" onclick="exportSceneFile()">⬇ Export .ajg</button>
@@ -176,10 +176,10 @@
       group.add(handle);
       
       const ray = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.002, 0.002, 2),
+        new THREE.CylinderGeometry(0.002, 0.002, 3),
         new THREE.MeshBasicMaterial({ color: 0x007acc, transparent: true, opacity: 0.5 })
       );
-      ray.position.z = -1;
+      ray.position.z = -1.5;
       ray.rotation.x = Math.PI / 2;
       group.add(ray);
       return group;
@@ -375,7 +375,7 @@
       }
     }
 
-    // VR PHYSICS, JUMPING, COLLISION, & GRABBING CONTROLS
+    // VR PHYSICS, JUMPING, COLLISION, & GRABBING LOGIC
     let lastSnapTurn = 0;
     let lastJumpPress = false;
     let verticalVelocity = 0;
@@ -383,8 +383,9 @@
     const gravity = 9.8;
     const jumpStrength = 4.2;
 
-    const controller1Grab = { object: null, originalParent: null };
-    const controller2Grab = { object: null, originalParent: null };
+    const controller1Grab = { object: null };
+    const controller2Grab = { object: null };
+    const vrRaycaster = new THREE.Raycaster();
 
     function tryGrabObject(controller, grabState) {
       if (grabState.object) return;
@@ -392,25 +393,47 @@
       const controllerPos = new THREE.Vector3();
       controller.getWorldPosition(controllerPos);
 
+      // 1. Proximity Check via Bounding Boxes
       let closestObj = null;
-      let minDistance = 0.3; // Maximum distance allowed to grab (30cm)
+      let minDistance = Infinity;
 
       gameObjects.forEach(obj => {
         if (!obj.userData.isGrabbable || obj.userData.primitiveType === 'spawnpoint') return;
 
-        const objPos = new THREE.Vector3();
-        obj.getWorldPosition(objPos);
-        const dist = controllerPos.distanceTo(objPos);
+        const objBox = new THREE.Box3().setFromObject(obj);
+        objBox.expandByScalar(0.15);
 
-        if (dist < minDistance) {
-          minDistance = dist;
-          closestObj = obj;
+        if (objBox.containsPoint(controllerPos)) {
+          const center = new THREE.Vector3();
+          objBox.getCenter(center);
+          const dist = controllerPos.distanceTo(center);
+          if (dist < minDistance) {
+            minDistance = dist;
+            closestObj = obj;
+          }
         }
       });
 
+      // 2. Fallback: Controller Raycast Grab
+      if (!closestObj) {
+        const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(controller.quaternion);
+        vrRaycaster.set(controllerPos, dir);
+        vrRaycaster.far = 4.0;
+        
+        const grabbables = gameObjects.filter(o => o.userData.isGrabbable && o.userData.primitiveType !== 'spawnpoint');
+        const hits = vrRaycaster.intersectObjects(grabbables, true);
+
+        if (hits.length > 0) {
+          let hitObj = hits[0].object;
+          while (hitObj.parent && hitObj.parent !== scene && gameObjects.includes(hitObj.parent)) {
+            hitObj = hitObj.parent;
+          }
+          closestObj = hitObj;
+        }
+      }
+
       if (closestObj) {
         grabState.object = closestObj;
-        grabState.originalParent = closestObj.parent;
         controller.attach(closestObj);
       }
     }
@@ -420,7 +443,6 @@
       if (grabState.object) {
         scene.attach(grabState.object);
         grabState.object = null;
-        grabState.originalParent = null;
       }
     }
 
@@ -438,15 +460,15 @@
           const controller = (source.handedness === 'left') ? controller1 : controller2;
           const grabState = (source.handedness === 'left') ? controller1Grab : controller2Grab;
 
-          // TRIGGER BUTTON: GRABBING
-          const triggerPressed = buttons[0] && buttons[0].pressed;
+          // TRIGGER BUTTON (Index 0): Grabbing
+          const triggerPressed = buttons[0] && (buttons[0].pressed || buttons[0].value > 0.1);
           if (triggerPressed) {
             tryGrabObject(controller, grabState);
           } else {
             releaseGrabbedObject(controller);
           }
 
-          // LEFT CONTROLLER: MOVEMENT
+          // LEFT CONTROLLER: THUMBSTICK MOVEMENT
           if (source.handedness === 'left' && axes.length >= 4) {
             const xAxis = axes[2] || axes[0];
             const zAxis = axes[3] || axes[1];
@@ -460,7 +482,7 @@
             }
           }
 
-          // RIGHT CONTROLLER: SNAP TURN & JUMPING
+          // RIGHT CONTROLLER: SNAP TURN & A-BUTTON JUMPING
           if (source.handedness === 'right') {
             if (axes.length >= 4) {
               const xAxis = axes[2] || axes[0];
@@ -471,7 +493,7 @@
               }
             }
 
-            // A BUTTON (Button Index 4 or 0 depending on VR profile): JUMPING
+            // A BUTTON: JUMPING
             const aButtonPressed = (buttons[4] && buttons[4].pressed) || (buttons[0] && buttons[0].pressed && source.handedness === 'right');
             if (aButtonPressed && !lastJumpPress && isGrounded) {
               verticalVelocity = jumpStrength;
@@ -480,49 +502,14 @@
             lastJumpPress = aButtonPressed;
           }
         }
-
-        // HAND TRACKING: MIDDLE FINGER PINCH MOVEMENT
-        if (source.hand && source.handedness === 'left') {
-          const thumbTip = source.hand.get('thumb-tip');
-          const middleTip = source.hand.get('middle-finger-tip');
-
-          if (thumbTip && middleTip) {
-            const frame = renderer.xr.getFrame();
-            const referenceSpace = renderer.xr.getReferenceSpace();
-
-            if (frame && referenceSpace) {
-              const thumbPose = frame.getJointPose(thumbTip, referenceSpace);
-              const middlePose = frame.getJointPose(middleTip, referenceSpace);
-
-              if (thumbPose && middlePose) {
-                const tPos = thumbPose.transform.position;
-                const mPos = middlePose.transform.position;
-
-                const dx = tPos.x - mPos.x;
-                const dy = tPos.y - mPos.y;
-                const dz = tPos.z - mPos.z;
-                const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-                if (distance < 0.03) {
-                  const dir = new THREE.Vector3();
-                  camera.getWorldDirection(dir);
-                  dir.y = 0;
-                  dir.normalize();
-                  moveDirection.add(dir);
-                }
-              }
-            }
-          }
-        }
       }
 
-      // APPLY HORIZONTAL MOVEMENT WITH COLLISION DETECTION
+      // APPLY HORIZONTAL MOVEMENT WITH COLLISION
       if (moveDirection.lengthSq() > 0) {
         moveDirection.normalize();
         const moveSpeed = 2.5 * delta;
         const proposedPos = playerRig.position.clone().addScaledVector(moveDirection, moveSpeed);
 
-        // Simple Box Collision check against non-held scene objects
         let isColliding = false;
         const playerRadius = 0.3;
 
@@ -545,7 +532,7 @@
         }
       }
 
-      // APPLY GRAVITY AND VERTICAL MOVEMENT
+      // APPLY GRAVITY & VERTICAL MOVEMENT
       verticalVelocity -= gravity * delta;
       playerRig.position.y += verticalVelocity * delta;
 
