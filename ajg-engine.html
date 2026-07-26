@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>AJG ENGINE v1.7</title>
+  <!-- Three.js, OrbitControls, TransformControls, and WebXR Button -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/TransformControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/vr/VRButton.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; }
+    body { display: flex; flex-direction: column; height: 100vh; background: #1a1a1a; color: #d4d4d4; }
+    
+    #toolbar { height: 40px; background: #252526; border-bottom: 2px solid #007acc; display: flex; align-items: center; padding: 0 12px; gap: 6px; overflow-x: auto; }
+    .brand-title { font-weight: bold; font-size: 14px; color: #007acc; letter-spacing: 1px; display: flex; align-items: center; gap: 6px; margin-right: 8px; flex-shrink: 0; }
+    .brand-badge { background: #007acc; color: white; font-size: 9px; padding: 2px 5px; border-radius: 3px; font-weight: normal; }
+    
+    #editor { display: flex; flex: 1; overflow: hidden; position: relative; }
+    #hierarchy { width: 220px; background: #252526; border-right: 1px solid #3c3c3c; padding: 10px; overflow-y: auto; }
+    #viewport { flex: 1; position: relative; background: #111; cursor: pointer; }
+    #inspector { width: 300px; background: #252526; border-left: 1px solid #3c3c3c; padding: 10px; overflow-y: auto; }
+    
+    .btn { background: #3c3c3c; color: #fff; border: 1px solid #555; padding: 4px 8px; border-radius: 3px; cursor: pointer; font-size: 11px; white-space: nowrap; transition: 0.1s; }
+    .btn:hover { background: #4a4a4a; border-color: #007acc; }
+    .btn.active { background: #007acc; border-color: #007acc; color: #fff; }
+    .btn-action { background: #2d5a88; border-color: #007acc; }
+    .btn-vr { background: #7c3aed; border-color: #a855f7; }
+    .btn-vr:hover { background: #6d28d9; border-color: #c084fc; }
+    .btn-danger { background: #882d2d; border-color: #ef4444; }
+    
+    .item { padding: 6px 8px; cursor: pointer; border-radius: 3px; font-size: 13px; margin-top: 2px; }
+    .item.selected { background: #094771; color: #fff; border-left: 3px solid #007acc; }
+    
+    .section-header { font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: #888; margin: 12px 0 6px 0; border-bottom: 1px solid #333; padding-bottom: 2px; }
+    .prop-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; font-size: 12px; }
+    .prop-row label { width: 70px; color: #aaa; }
+    .vec3-inputs { display: flex; gap: 4px; flex: 1; }
+    .vec3-inputs input { width: 100%; background: #1e1e1e; border: 1px solid #3c3c3c; color: #fff; padding: 4px; border-radius: 2px; font-size: 11px; }
+
+    #engine-modal-overlay {
+      display: none;
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(3px);
+      z-index: 9999;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .engine-modal-card {
+      background: #252526;
+      border: 1px solid #007acc;
+      border-radius: 8px;
+      width: 320px;
+      padding: 20px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.8);
+      text-align: center;
+    }
+
+    .engine-modal-title { font-size: 13px; font-weight: bold; color: #007acc; margin-bottom: 12px; }
+    .engine-modal-body { font-size: 14px; color: #ffffff; margin-bottom: 18px; word-break: break-word; }
+    .engine-modal-btn { background: #007acc; color: #fff; border: none; padding: 8px 20px; border-radius: 4px; font-size: 12px; font-weight: bold; cursor: pointer; }
+  </style>
+</head>
+<body>
+
+  <div id="toolbar">
+    <div class="brand-title">⚡ AJG ENGINE <span class="brand-badge">v1.7</span></div>
+    <div style="height:16px; width:1px; background:#444;"></div>
+    
+    <button class="btn btn-action" onclick="exportSceneFile()">⬇ Export .ajg</button>
+    <button class="btn btn-action" onclick="document.getElementById('fileInput').click()">⬆ Import .ajg</button>
+    <button class="btn btn-vr" id="btnPlayVR" onclick="playInVR()">🥽 Play in VR</button>
+    <input type="file" id="fileInput" accept=".ajg,.json" style="display:none;" onchange="importSceneFile(event)">
+    
+    <div style="height:16px; width:1px; background:#444;"></div>
+    
+    <button class="btn active" id="btnTranslate" onclick="setTransformMode('translate')">Move</button>
+    <button class="btn" id="btnRotate" onclick="setTransformMode('rotate')">Rotate</button>
+    <button class="btn" id="btnScale" onclick="setTransformMode('scale')">Scale</button>
+    
+    <div style="height:16px; width:1px; background:#444;"></div>
+    
+    <button class="btn" onclick="cloneSelected()">📋 Clone</button>
+    <button class="btn btn-danger" onclick="deleteSelected()">🗑️ Delete</button>
+    <button class="btn" onclick="addPrimitive('cube')">+ Cube</button>
+    <button class="btn" onclick="addPrimitive('sphere')">+ Sphere</button>
+    <button class="btn" onclick="addPrimitive('spawnpoint')">📍 + Spawn Point</button>
+  </div>
+
+  <div id="editor">
+    <div id="hierarchy">
+      <div class="section-header">Scene Hierarchy</div>
+      <div id="object-list"></div>
+    </div>
+
+    <div id="viewport"></div>
+
+    <div id="inspector">
+      <div class="section-header">AJG Inspector</div>
+      <div id="inspector-content">Select an object in Hierarchy or Click in Viewport</div>
+    </div>
+
+    <div id="engine-modal-overlay">
+      <div class="engine-modal-card">
+        <div class="engine-modal-title">⚡ AJG ENGINE NOTICE</div>
+        <div class="engine-modal-body" id="engine-modal-msg">Notification Message</div>
+        <button class="engine-modal-btn" onclick="closeEnginePopup()">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function showEnginePopup(msg) {
+      document.getElementById('engine-modal-msg').innerText = msg;
+      document.getElementById('engine-modal-overlay').style.display = 'flex';
+    }
+
+    function closeEnginePopup() {
+      document.getElementById('engine-modal-overlay').style.display = 'none';
+    }
+
+    const container = document.getElementById('viewport');
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x1a1a1a);
+
+    const camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 1000);
+    camera.position.set(3, 4, 5);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.xr.enabled = true; // Enable WebXR on renderer
+    container.appendChild(renderer.domElement);
+
+    const orbit = new THREE.OrbitControls(camera, renderer.domElement);
+    orbit.target.set(0, 0, 0);
+
+    const transformGizmo = new THREE.TransformControls(camera, renderer.domElement);
+    transformGizmo.addEventListener('dragging-changed', (event) => {
+      orbit.enabled = !event.value;
+    });
+    transformGizmo.addEventListener('change', () => {
+      if (selectedObject) updateInspectorValues();
+    });
+    scene.add(transformGizmo);
+
+    const gridHelper = new THREE.GridHelper(10, 10, 0x007acc, 0x333333);
+    scene.add(gridHelper);
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    scene.add(ambientLight);
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(5, 10, 5);
+    scene.add(dirLight);
+
+    // Set up Player Rig for WebXR VR mode
+    const playerRig = new THREE.Group();
+    scene.add(playerRig);
+    playerRig.add(camera);
+
+    const controller1 = renderer.xr.getController(0);
+    const controller2 = renderer.xr.getController(1);
+    playerRig.add(controller1);
+    playerRig.add(controller2);
+
+    function createControllerMesh() {
+      const group = new THREE.Group();
+      const handle = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.02, 0.02, 0.15),
+        new THREE.MeshStandardMaterial({ color: 0x333333 })
+      );
+      handle.rotation.x = -Math.PI / 4;
+      group.add(handle);
+      
+      const ray = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.002, 0.002, 2),
+        new THREE.MeshBasicMaterial({ color: 0x007acc, transparent: true, opacity: 0.5 })
+      );
+      ray.position.z = -1;
+      ray.rotation.x = Math.PI / 2;
+      group.add(ray);
+      return group;
+    }
+
+    controller1.add(createControllerMesh());
+    controller2.add(createControllerMesh());
+
+    const gameObjects = [];
+    let selectedObject = null;
+
+    const radToDeg = (r) => (r * 180 / Math.PI);
+    const degToRad = (d) => (d * Math.PI / 180);
+
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+
+    renderer.domElement.addEventListener('pointerdown', (event) => {
+      if (transformGizmo.dragging || renderer.xr.isPresenting) return;
+
+      const rect = renderer.domElement.getBoundingClientRect();
+      mouse.x = ((event.clientX - rect.left) / container.clientWidth) * 2 - 1;
+      mouse.y = -((event.clientY - rect.top) / container.clientHeight) * 2 + 1;
+
+      raycaster.setFromCamera(mouse, camera);
+      const intersects = raycaster.intersectObjects(gameObjects, true);
+
+      if (intersects.length > 0) {
+        let hitObj = intersects[0].object;
+        while (hitObj.parent && hitObj.parent !== scene && gameObjects.includes(hitObj.parent)) {
+          hitObj = hitObj.parent;
+        }
+        selectObject(hitObj);
+      }
+    });
+
+    function addPrimitive(type, customData = null) {
+      let mesh;
+      const typeName = customData ? customData.type : type;
+      const name = customData ? customData.name : `${typeName}_${gameObjects.length + 1}`;
+
+      if (typeName === 'cube') {
+        const geo = new THREE.BoxGeometry(1, 1, 1);
+        const mat = new THREE.MeshStandardMaterial({ 
+          color: customData ? customData.color : 0x007acc, 
+          roughness: 0.3 
+        });
+        mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(0, 0.5, 0);
+      } else if (typeName === 'sphere') {
+        const geo = new THREE.SphereGeometry(0.6, 32, 32);
+        const mat = new THREE.MeshStandardMaterial({ 
+          color: customData ? customData.color : 0xef4444, 
+          roughness: 0.3 
+        });
+        mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(0, 0.6, 0);
+      } else if (typeName === 'spawnpoint') {
+        mesh = new THREE.Group();
+        
+        const baseGeo = new THREE.CylinderGeometry(0.8, 0.8, 0.1, 32);
+        const baseMat = new THREE.MeshStandardMaterial({ 
+          color: customData ? customData.color : 0x10b981, 
+          roughness: 0.4 
+        });
+        const baseMesh = new THREE.Mesh(baseGeo, baseMat);
+        baseMesh.position.y = 0.05;
+        mesh.add(baseMesh);
+
+        const arrowGeo = new THREE.ConeGeometry(0.3, 0.6, 16);
+        const arrowMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2 });
+        const arrowMesh = new THREE.Mesh(arrowGeo, arrowMat);
+        arrowMesh.position.set(0, 0.4, 0);
+        mesh.add(arrowMesh);
+
+        mesh.position.set(0, 0, 0);
+      }
+
+      mesh.name = name;
+      mesh.userData.primitiveType = typeName;
+
+      if (customData) {
+        mesh.position.fromArray(customData.position);
+        mesh.rotation.fromArray(customData.rotation);
+        mesh.scale.fromArray(customData.scale);
+      }
+
+      scene.add(mesh);
+      gameObjects.push(mesh);
+      selectObject(mesh);
+      updateHierarchy();
+    }
+
+    function serializeScene() {
+      return gameObjects.map(obj => {
+        let hexColor = '#007acc';
+        if (obj.material) {
+          hexColor = `#${obj.material.color.getHexString()}`;
+        } else if (obj.children && obj.children[0] && obj.children[0].material) {
+          hexColor = `#${obj.children[0].material.color.getHexString()}`;
+        }
+
+        return {
+          name: obj.name,
+          type: obj.userData.primitiveType || 'cube',
+          position: obj.position.toArray(),
+          rotation: [obj.rotation.x, obj.rotation.y, obj.rotation.z],
+          scale: obj.scale.toArray(),
+          color: hexColor
+        };
+      });
+    }
+
+    function deserializeScene(data) {
+      transformGizmo.detach();
+      gameObjects.forEach(obj => scene.remove(obj));
+      gameObjects.length = 0;
+      selectedObject = null;
+
+      data.forEach(item => addPrimitive(item.type, item));
+      updateHierarchy();
+      updateInspector();
+    }
+
+    function exportSceneFile() {
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(serializeScene(), null, 2));
+      const downloadAnchor = document.createElement('a');
+      downloadAnchor.setAttribute("href", dataStr);
+      downloadAnchor.setAttribute("download", "scene.ajg");
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+    }
+
+    function importSceneFile(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          const data = JSON.parse(e.target.result);
+          deserializeScene(data);
+        } catch (err) {
+          showEnginePopup("Invalid .ajg scene file.");
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    // DIRECT WEBXR PLAY IN VR MODE
+    async function playInVR() {
+      if (!navigator.xr) {
+        showEnginePopup("WebXR is not supported on this device/browser.");
+        return;
+      }
+
+      const isSupported = await navigator.xr.isSessionSupported('immersive-vr');
+      if (!isSupported) {
+        showEnginePopup("VR device or WebXR VR session is not available.");
+        return;
+      }
+
+      const spawnPoint = gameObjects.find(obj => obj.userData.primitiveType === 'spawnpoint');
+      if (spawnPoint) {
+        playerRig.position.copy(spawnPoint.position);
+        playerRig.rotation.y = spawnPoint.rotation.y;
+      } else {
+        playerRig.position.set(0, 0, 0);
+        playerRig.rotation.set(0, 0, 0);
+      }
+
+      transformGizmo.detach();
+
+      try {
+        const session = await navigator.xr.requestSession('immersive-vr', {
+          optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking']
+        });
+
+        renderer.xr.setSession(session);
+
+        session.addEventListener('end', () => {
+          if (selectedObject) transformGizmo.attach(selectedObject);
+        });
+      } catch (err) {
+        showEnginePopup("Failed to start VR session: " + err.message);
+      }
+    }
+
+    let lastSnapTurn = 0;
+    function handleVRMovement() {
+      const session = renderer.xr.getSession();
+      if (!session) return;
+
+      for (const source of session.inputSources) {
+        if (!source.gamepad) continue;
+        const axes = source.gamepad.axes;
+
+        if (source.handedness === 'left' && axes.length >= 4) {
+          const xAxis = axes[2] || axes[0];
+          const zAxis = axes[3] || axes[1];
+
+          if (Math.abs(xAxis) > 0.1 || Math.abs(zAxis) > 0.1) {
+            const moveSpeed = 0.05;
+            const moveVector = new THREE.Vector3(xAxis, 0, zAxis);
+            const headRotation = new THREE.Euler(0, 0, 0, 'YXZ');
+            headRotation.setFromQuaternion(camera.quaternion);
+            moveVector.applyEuler(new THREE.Euler(0, headRotation.y + playerRig.rotation.y, 0));
+            playerRig.position.addScaledVector(moveVector, moveSpeed);
+          }
+        }
+
+        if (source.handedness === 'right' && axes.length >= 4) {
+          const xAxis = axes[2] || axes[0];
+          const now = performance.now();
+          if (Math.abs(xAxis) > 0.6 && now - lastSnapTurn > 300) {
+            playerRig.rotation.y -= Math.sign(xAxis) * (Math.PI / 4);
+            lastSnapTurn = now;
+          }
+        }
+      }
+    }
+
+    function cloneSelected() {
+      if (!selectedObject) return;
+      const clone = selectedObject.clone(true);
+      clone.position.x += 0.5;
+      clone.position.z += 0.5;
+      clone.name = `${selectedObject.name}_copy`;
+      
+      if (selectedObject.material) {
+        clone.material = selectedObject.material.clone();
+      }
+      
+      scene.add(clone);
+      gameObjects.push(clone);
+      selectObject(clone);
+      updateHierarchy();
+    }
+
+    function deleteSelected() {
+      if (!selectedObject) return;
+      transformGizmo.detach();
+      scene.remove(selectedObject);
+      const idx = gameObjects.indexOf(selectedObject);
+      if (idx > -1) gameObjects.splice(idx, 1);
+      selectedObject = null;
+      updateHierarchy();
+      updateInspector();
+    }
+
+    function setTransformMode(mode) {
+      transformGizmo.setMode(mode);
+      document.getElementById('btnTranslate').classList.toggle('active', mode === 'translate');
+      document.getElementById('btnRotate').classList.toggle('active', mode === 'rotate');
+      document.getElementById('btnScale').classList.toggle('active', mode === 'scale');
+    }
+
+    function selectObject(obj) {
+      selectedObject = obj;
+      if (obj && !renderer.xr.isPresenting) transformGizmo.attach(obj);
+      else transformGizmo.detach();
+      updateHierarchy();
+      updateInspector();
+    }
+
+    function updateHierarchy() {
+      const list = document.getElementById('object-list');
+      list.innerHTML = '';
+      gameObjects.forEach(obj => {
+        const div = document.createElement('div');
+        div.className = `item ${selectedObject === obj ? 'selected' : ''}`;
+        
+        let icon = '📦';
+        if (obj.userData.primitiveType === 'sphere') icon = '🔮';
+        if (obj.userData.primitiveType === 'spawnpoint') icon = '📍';
+
+        div.innerText = `${icon} ${obj.name}`;
+        div.onclick = () => selectObject(obj);
+        list.appendChild(div);
+      });
+    }
+
+    function updateInspector() {
+      const panel = document.getElementById('inspector-content');
+      if (!selectedObject) {
+        panel.innerHTML = '<span style="color:#666">Select an object in Hierarchy or Click in Viewport</span>';
+        return;
+      }
+
+      let currentColor = '#007acc';
+      if (selectedObject.material) {
+        currentColor = `#${selectedObject.material.color.getHexString()}`;
+      } else if (selectedObject.children && selectedObject.children[0] && selectedObject.children[0].material) {
+        currentColor = `#${selectedObject.children[0].material.color.getHexString()}`;
+      }
+
+      panel.innerHTML = `
+        <div class="prop-row"><label>Name</label><input type="text" id="inpName" value="${selectedObject.name}" onchange="selectedObject.name=this.value; updateHierarchy();"></div>
+        
+        <div class="section-header">Position</div>
+        <div class="prop-row"><label>X / Y / Z</label>
+          <div class="vec3-inputs">
+            <input type="number" step="0.1" id="posX" oninput="applyInspectorValues()">
+            <input type="number" step="0.1" id="posY" oninput="applyInspectorValues()">
+            <input type="number" step="0.1" id="posZ" oninput="applyInspectorValues()">
+          </div>
+        </div>
+
+        <div class="section-header">Rotation (Degrees)</div>
+        <div class="prop-row"><label>X / Y / Z</label>
+          <div class="vec3-inputs">
+            <input type="number" step="1" id="rotX" oninput="applyInspectorValues()">
+            <input type="number" step="1" id="rotY" oninput="applyInspectorValues()">
+            <input type="number" step="1" id="rotZ" oninput="applyInspectorValues()">
+          </div>
+        </div>
+
+        <div class="section-header">Scale</div>
+        <div class="prop-row"><label>X / Y / Z</label>
+          <div class="vec3-inputs">
+            <input type="number" step="0.1" id="sclX" oninput="applyInspectorValues()">
+            <input type="number" step="0.1" id="sclY" oninput="applyInspectorValues()">
+            <input type="number" step="0.1" id="sclZ" oninput="applyInspectorValues()">
+          </div>
+        </div>
+
+        <div class="section-header">Material</div>
+        <div class="prop-row"><label>Color</label>
+          <input type="color" id="matColor" value="${currentColor}" oninput="updateSelectedColor(this.value)">
+        </div>
+      `;
+
+      updateInspectorValues();
+    }
+
+    function updateSelectedColor(colorHex) {
+      if (!selectedObject) return;
+      if (selectedObject.material) {
+        selectedObject.material.color.set(colorHex);
+      } else if (selectedObject.children && selectedObject.children[0] && selectedObject.children[0].material) {
+        selectedObject.children[0].material.color.set(colorHex);
+      }
+    }
+
+    function updateInspectorValues() {
+      if (!selectedObject) return;
+      const p = selectedObject.position, r = selectedObject.rotation, s = selectedObject.scale;
+
+      const px = document.getElementById('posX'); if (px) px.value = p.x.toFixed(2);
+      const py = document.getElementById('posY'); if (py) py.value = p.y.toFixed(2);
+      const pz = document.getElementById('posZ'); if (pz) pz.value = p.z.toFixed(2);
+
+      const rx = document.getElementById('rotX'); if (rx) rx.value = radToDeg(r.x).toFixed(0);
+      const ry = document.getElementById('rotY'); if (ry) ry.value = radToDeg(r.y).toFixed(0);
+      const rz = document.getElementById('rotZ'); if (rz) rz.value = radToDeg(r.z).toFixed(0);
+
+      const sx = document.getElementById('sclX'); if (sx) sx.value = s.x.toFixed(2);
+      const sy = document.getElementById('sclY'); if (sy) sy.value = s.y.toFixed(2);
+      const sz = document.getElementById('sclZ'); if (sz) sz.value = s.z.toFixed(2);
+    }
+
+    function applyInspectorValues() {
+      if (!selectedObject) return;
+      selectedObject.position.set(
+        parseFloat(document.getElementById('posX').value) || 0,
+        parseFloat(document.getElementById('posY').value) || 0,
+        parseFloat(document.getElementById('posZ').value) || 0
+      );
+      selectedObject.rotation.set(
+        degToRad(parseFloat(document.getElementById('rotX').value) || 0),
+        degToRad(parseFloat(document.getElementById('rotY').value) || 0),
+        degToRad(parseFloat(document.getElementById('rotZ').value) || 0)
+      );
+      selectedObject.scale.set(
+        parseFloat(document.getElementById('sclX').value) || 1,
+        parseFloat(document.getElementById('sclY').value) || 1,
+        parseFloat(document.getElementById('sclZ').value) || 1
+      );
+    }
+
+    // Animation Loop with WebXR Rendering
+    renderer.setAnimationLoop(() => {
+      if (renderer.xr.isPresenting) {
+        handleVRMovement();
+      } else {
+        orbit.update();
+      }
+      renderer.render(scene, camera);
+    });
+
+    window.addEventListener('resize', () => {
+      camera.aspect = container.clientWidth / container.clientHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(container.clientWidth, container.clientHeight);
+    });
+  </script>
+</body>
+</html>
