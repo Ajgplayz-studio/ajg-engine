@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>AJG ENGINE v1.7</title>
+  <title>AJG ENGINE v1.8</title>
   <!-- Three.js, OrbitControls, TransformControls, and WebXR Button -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
@@ -34,7 +34,7 @@
     
     .section-header { font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: #888; margin: 12px 0 6px 0; border-bottom: 1px solid #333; padding-bottom: 2px; }
     .prop-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; font-size: 12px; }
-    .prop-row label { width: 70px; color: #aaa; }
+    .prop-row label { width: 90px; color: #aaa; }
     .vec3-inputs { display: flex; gap: 4px; flex: 1; }
     .vec3-inputs input { width: 100%; background: #1e1e1e; border: 1px solid #3c3c3c; color: #fff; padding: 4px; border-radius: 2px; font-size: 11px; }
 
@@ -67,7 +67,7 @@
 <body>
 
   <div id="toolbar">
-    <div class="brand-title">⚡ AJG ENGINE <span class="brand-badge">v1.7</span></div>
+    <div class="brand-title">⚡ AJG ENGINE <span class="brand-badge">v1.8</span></div>
     <div style="height:16px; width:1px; background:#444;"></div>
     
     <button class="btn btn-action" onclick="exportSceneFile()">⬇ Export .ajg</button>
@@ -260,6 +260,7 @@
 
       mesh.name = name;
       mesh.userData.primitiveType = typeName;
+      mesh.userData.isGrabbable = customData ? !!customData.isGrabbable : false;
 
       if (customData) {
         mesh.position.fromArray(customData.position);
@@ -288,7 +289,8 @@
           position: obj.position.toArray(),
           rotation: [obj.rotation.x, obj.rotation.y, obj.rotation.z],
           scale: obj.scale.toArray(),
-          color: hexColor
+          color: hexColor,
+          isGrabbable: !!obj.userData.isGrabbable
         };
       });
     }
@@ -330,7 +332,7 @@
       reader.readAsText(file);
     }
 
-    // WEBXR PLAY IN VR MODE (Includes Hand Tracking)
+    // WEBXR PLAY IN VR MODE
     async function playInVR() {
       if (!navigator.xr) {
         showEnginePopup("WebXR is not supported on this device/browser.");
@@ -352,7 +354,8 @@
         playerRig.rotation.set(0, 0, 0);
       }
 
-      verticalVelocity = 0; // Reset gravity speed when entering VR
+      verticalVelocity = 0;
+      isGrounded = false;
       transformGizmo.detach();
 
       try {
@@ -364,53 +367,121 @@
 
         session.addEventListener('end', () => {
           if (selectedObject) transformGizmo.attach(selectedObject);
+          releaseGrabbedObject(controller1);
+          releaseGrabbedObject(controller2);
         });
       } catch (err) {
         showEnginePopup("Failed to start VR session: " + err.message);
       }
     }
 
-    // VR PHYSICS & MOVEMENT CONTROLS
+    // VR PHYSICS, JUMPING, COLLISION, & GRABBING CONTROLS
     let lastSnapTurn = 0;
+    let lastJumpPress = false;
     let verticalVelocity = 0;
-    const gravity = 9.8; // Gravity acceleration
+    let isGrounded = false;
+    const gravity = 9.8;
+    const jumpStrength = 4.2;
+
+    const controller1Grab = { object: null, originalParent: null };
+    const controller2Grab = { object: null, originalParent: null };
+
+    function tryGrabObject(controller, grabState) {
+      if (grabState.object) return;
+
+      const controllerPos = new THREE.Vector3();
+      controller.getWorldPosition(controllerPos);
+
+      let closestObj = null;
+      let minDistance = 0.3; // Maximum distance allowed to grab (30cm)
+
+      gameObjects.forEach(obj => {
+        if (!obj.userData.isGrabbable || obj.userData.primitiveType === 'spawnpoint') return;
+
+        const objPos = new THREE.Vector3();
+        obj.getWorldPosition(objPos);
+        const dist = controllerPos.distanceTo(objPos);
+
+        if (dist < minDistance) {
+          minDistance = dist;
+          closestObj = obj;
+        }
+      });
+
+      if (closestObj) {
+        grabState.object = closestObj;
+        grabState.originalParent = closestObj.parent;
+        controller.attach(closestObj);
+      }
+    }
+
+    function releaseGrabbedObject(controller) {
+      const grabState = (controller === controller1) ? controller1Grab : controller2Grab;
+      if (grabState.object) {
+        scene.attach(grabState.object);
+        grabState.object = null;
+        grabState.originalParent = null;
+      }
+    }
 
     function handleVRPhysicsAndMovement(delta) {
       const session = renderer.xr.getSession();
       if (!session) return;
 
-      // 1. Controller Thumbstick Movement & Snap Turning
+      let moveDirection = new THREE.Vector3(0, 0, 0);
+
       for (const source of session.inputSources) {
         if (source.gamepad) {
           const axes = source.gamepad.axes;
+          const buttons = source.gamepad.buttons;
 
-          // Left Controller Move
+          const controller = (source.handedness === 'left') ? controller1 : controller2;
+          const grabState = (source.handedness === 'left') ? controller1Grab : controller2Grab;
+
+          // TRIGGER BUTTON: GRABBING
+          const triggerPressed = buttons[0] && buttons[0].pressed;
+          if (triggerPressed) {
+            tryGrabObject(controller, grabState);
+          } else {
+            releaseGrabbedObject(controller);
+          }
+
+          // LEFT CONTROLLER: MOVEMENT
           if (source.handedness === 'left' && axes.length >= 4) {
             const xAxis = axes[2] || axes[0];
             const zAxis = axes[3] || axes[1];
 
             if (Math.abs(xAxis) > 0.1 || Math.abs(zAxis) > 0.1) {
-              const moveSpeed = 2.5 * delta;
-              const moveVector = new THREE.Vector3(xAxis, 0, zAxis);
-              const headRotation = new THREE.Euler(0, 0, 0, 'YXZ');
-              headRotation.setFromQuaternion(camera.quaternion);
-              moveVector.applyEuler(new THREE.Euler(0, headRotation.y + playerRig.rotation.y, 0));
-              playerRig.position.addScaledVector(moveVector, moveSpeed);
+              const inputVec = new THREE.Vector3(xAxis, 0, zAxis);
+              const headEul = new THREE.Euler(0, 0, 0, 'YXZ');
+              headEul.setFromQuaternion(camera.quaternion);
+              inputVec.applyEuler(new THREE.Euler(0, headEul.y + playerRig.rotation.y, 0));
+              moveDirection.add(inputVec);
             }
           }
 
-          // Right Controller Snap Turn
-          if (source.handedness === 'right' && axes.length >= 4) {
-            const xAxis = axes[2] || axes[0];
-            const now = performance.now();
-            if (Math.abs(xAxis) > 0.6 && now - lastSnapTurn > 300) {
-              playerRig.rotation.y -= Math.sign(xAxis) * (Math.PI / 4);
-              lastSnapTurn = now;
+          // RIGHT CONTROLLER: SNAP TURN & JUMPING
+          if (source.handedness === 'right') {
+            if (axes.length >= 4) {
+              const xAxis = axes[2] || axes[0];
+              const now = performance.now();
+              if (Math.abs(xAxis) > 0.6 && now - lastSnapTurn > 300) {
+                playerRig.rotation.y -= Math.sign(xAxis) * (Math.PI / 4);
+                lastSnapTurn = now;
+              }
             }
+
+            // A BUTTON (Button Index 4 or 0 depending on VR profile): JUMPING
+            const aButtonPressed = (buttons[4] && buttons[4].pressed) || (buttons[0] && buttons[0].pressed && source.handedness === 'right');
+            if (aButtonPressed && !lastJumpPress && isGrounded) {
+              verticalVelocity = jumpStrength;
+              isGrounded = false;
+            }
+            lastJumpPress = aButtonPressed;
           }
         }
 
-        // 2. Hand Tracking Movement (Left Hand Middle Finger + Thumb Pinch)
+        // HAND TRACKING: MIDDLE FINGER PINCH MOVEMENT
         if (source.hand && source.handedness === 'left') {
           const thumbTip = source.hand.get('thumb-tip');
           const middleTip = source.hand.get('middle-finger-tip');
@@ -427,20 +498,17 @@
                 const tPos = thumbPose.transform.position;
                 const mPos = middlePose.transform.position;
 
-                // Calculate distance between thumb and middle finger tip
                 const dx = tPos.x - mPos.x;
                 const dy = tPos.y - mPos.y;
                 const dz = tPos.z - mPos.z;
                 const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
-                // If thumb and middle finger are pinching (distance < 3 cm)
                 if (distance < 0.03) {
-                  const moveSpeed = 2.0 * delta;
                   const dir = new THREE.Vector3();
                   camera.getWorldDirection(dir);
-                  dir.y = 0; // Keep movement on horizontal plane
+                  dir.y = 0;
                   dir.normalize();
-                  playerRig.position.addScaledVector(dir, moveSpeed);
+                  moveDirection.add(dir);
                 }
               }
             }
@@ -448,17 +516,47 @@
         }
       }
 
-      // 3. Gravity & Ground Collision
+      // APPLY HORIZONTAL MOVEMENT WITH COLLISION DETECTION
+      if (moveDirection.lengthSq() > 0) {
+        moveDirection.normalize();
+        const moveSpeed = 2.5 * delta;
+        const proposedPos = playerRig.position.clone().addScaledVector(moveDirection, moveSpeed);
+
+        // Simple Box Collision check against non-held scene objects
+        let isColliding = false;
+        const playerRadius = 0.3;
+
+        for (const obj of gameObjects) {
+          if (obj.userData.primitiveType === 'spawnpoint') continue;
+          if (obj === controller1Grab.object || obj === controller2Grab.object) continue;
+
+          const objBox = new THREE.Box3().setFromObject(obj);
+          const expandedBox = objBox.clone().expandByScalar(playerRadius);
+
+          if (expandedBox.containsPoint(new THREE.Vector3(proposedPos.x, proposedPos.y + 0.5, proposedPos.z))) {
+            isColliding = true;
+            break;
+          }
+        }
+
+        if (!isColliding) {
+          playerRig.position.x = proposedPos.x;
+          playerRig.position.z = proposedPos.z;
+        }
+      }
+
+      // APPLY GRAVITY AND VERTICAL MOVEMENT
       verticalVelocity -= gravity * delta;
       playerRig.position.y += verticalVelocity * delta;
 
-      // Check collision with scene objects or floor (y = 0)
+      // GROUND RAYCASTING COLLISION
       const downRay = new THREE.Raycaster(
         new THREE.Vector3(playerRig.position.x, playerRig.position.y + 1, playerRig.position.z),
         new THREE.Vector3(0, -1, 0)
       );
 
-      const intersects = downRay.intersectObjects(gameObjects, true);
+      const filterObjects = gameObjects.filter(o => o !== controller1Grab.object && o !== controller2Grab.object);
+      const intersects = downRay.intersectObjects(filterObjects, true);
       let groundHeight = 0;
 
       if (intersects.length > 0) {
@@ -468,6 +566,7 @@
       if (playerRig.position.y <= groundHeight) {
         playerRig.position.y = groundHeight;
         verticalVelocity = 0;
+        isGrounded = true;
       }
     }
 
@@ -477,6 +576,7 @@
       clone.position.x += 0.5;
       clone.position.z += 0.5;
       clone.name = `${selectedObject.name}_copy`;
+      clone.userData.isGrabbable = !!selectedObject.userData.isGrabbable;
       
       if (selectedObject.material) {
         clone.material = selectedObject.material.clone();
@@ -545,6 +645,8 @@
         currentColor = `#${selectedObject.children[0].material.color.getHexString()}`;
       }
 
+      const isGrabbableChecked = !!selectedObject.userData.isGrabbable ? 'checked' : '';
+
       panel.innerHTML = `
         <div class="prop-row"><label>Name</label><input type="text" id="inpName" value="${selectedObject.name}" onchange="selectedObject.name=this.value; updateHierarchy();"></div>
         
@@ -578,6 +680,11 @@
         <div class="section-header">Material</div>
         <div class="prop-row"><label>Color</label>
           <input type="color" id="matColor" value="${currentColor}" oninput="updateSelectedColor(this.value)">
+        </div>
+
+        <div class="section-header">VR Interaction</div>
+        <div class="prop-row"><label>Grabbable</label>
+          <input type="checkbox" id="chkGrabbable" ${isGrabbableChecked} onchange="selectedObject.userData.isGrabbable = this.checked;">
         </div>
       `;
 
