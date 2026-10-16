@@ -2,12 +2,12 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>AJG ENGINE v1.9</title>
-  <!-- Three.js, OrbitControls, TransformControls, and WebXR Button -->
+  <title>AJG ENGINE v2.0</title>
+  <!-- Three.js, OrbitControls, TransformControls, GLTFLoader -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/TransformControls.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/vr/VRButton.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; }
     body { display: flex; flex-direction: column; height: 100vh; background: #1a1a1a; color: #d4d4d4; }
@@ -25,8 +25,6 @@
     .btn:hover { background: #4a4a4a; border-color: #007acc; }
     .btn.active { background: #007acc; border-color: #007acc; color: #fff; }
     .btn-action { background: #2d5a88; border-color: #007acc; }
-    .btn-vr { background: #7c3aed; border-color: #a855f7; }
-    .btn-vr:hover { background: #6d28d9; border-color: #c084fc; }
     .btn-danger { background: #882d2d; border-color: #ef4444; }
     
     .item { padding: 6px 8px; cursor: pointer; border-radius: 3px; font-size: 13px; margin-top: 2px; }
@@ -67,13 +65,16 @@
 <body>
 
   <div id="toolbar">
-    <div class="brand-title">⚡ AJG ENGINE <span class="brand-badge">v1.9</span></div>
+    <div class="brand-title">⚡ AJG ENGINE <span class="brand-badge">v2.0</span></div>
     <div style="height:16px; width:1px; background:#444;"></div>
     
     <button class="btn btn-action" onclick="exportSceneFile()">⬇ Export .ajg</button>
     <button class="btn btn-action" onclick="document.getElementById('fileInput').click()">⬆ Import .ajg</button>
-    <button class="btn btn-vr" id="btnPlayVR" onclick="playInVR()">🥽 Play in VR</button>
+    <button class="btn btn-action" onclick="document.getElementById('glbInput').click()">📦 Import .glb</button>
+    <button class="btn btn-action" onclick="downloadHTML()">🎮 Download HTML</button>
+    <button class="btn btn-action" onclick="downloadEXE()">💾 Download EXE</button>
     <input type="file" id="fileInput" accept=".ajg,.json" style="display:none;" onchange="importSceneFile(event)">
+    <input type="file" id="glbInput" accept=".glb" style="display:none;" onchange="importGLBFile(event)">
     
     <div style="height:16px; width:1px; background:#444;"></div>
     
@@ -131,7 +132,6 @@
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(container.clientWidth, container.clientHeight);
-    renderer.xr.enabled = true;
     container.appendChild(renderer.domElement);
 
     const orbit = new THREE.OrbitControls(camera, renderer.domElement);
@@ -156,38 +156,6 @@
     dirLight.position.set(5, 10, 5);
     scene.add(dirLight);
 
-    // Set up Player Rig for VR Mode
-    const playerRig = new THREE.Group();
-    scene.add(playerRig);
-    playerRig.add(camera);
-
-    const controller1 = renderer.xr.getController(0);
-    const controller2 = renderer.xr.getController(1);
-    playerRig.add(controller1);
-    playerRig.add(controller2);
-
-    function createControllerMesh() {
-      const group = new THREE.Group();
-      const handle = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.02, 0.02, 0.15),
-        new THREE.MeshStandardMaterial({ color: 0x333333 })
-      );
-      handle.rotation.x = -Math.PI / 4;
-      group.add(handle);
-      
-      const ray = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.002, 0.002, 3),
-        new THREE.MeshBasicMaterial({ color: 0x007acc, transparent: true, opacity: 0.5 })
-      );
-      ray.position.z = -1.5;
-      ray.rotation.x = Math.PI / 2;
-      group.add(ray);
-      return group;
-    }
-
-    controller1.add(createControllerMesh());
-    controller2.add(createControllerMesh());
-
     const gameObjects = [];
     let selectedObject = null;
 
@@ -198,7 +166,7 @@
     const mouse = new THREE.Vector2();
 
     renderer.domElement.addEventListener('pointerdown', (event) => {
-      if (transformGizmo.dragging || renderer.xr.isPresenting) return;
+      if (transformGizmo.dragging) return;
 
       const rect = renderer.domElement.getBoundingClientRect();
       mouse.x = ((event.clientX - rect.left) / container.clientWidth) * 2 - 1;
@@ -283,7 +251,7 @@
           hexColor = `#${obj.children[0].material.color.getHexString()}`;
         }
 
-        return {
+        const item = {
           name: obj.name,
           type: obj.userData.primitiveType || 'cube',
           position: obj.position.toArray(),
@@ -292,6 +260,8 @@
           color: hexColor,
           isGrabbable: !!obj.userData.isGrabbable
         };
+        if (item.type === 'glb' && obj.userData.glbData) item.glbData = obj.userData.glbData;
+        return item;
       });
     }
 
@@ -301,7 +271,10 @@
       gameObjects.length = 0;
       selectedObject = null;
 
-      data.forEach(item => addPrimitive(item.type, item));
+      data.forEach(item => {
+        if (item.type === 'glb' && item.glbData) addGLBFromData(item);
+        else addPrimitive(item.type, item);
+      });
       updateHierarchy();
       updateInspector();
     }
@@ -332,229 +305,244 @@
       reader.readAsText(file);
     }
 
-    // WEBXR PLAY IN VR MODE
-    async function playInVR() {
-      if (!navigator.xr) {
-        showEnginePopup("WebXR is not supported on this device/browser.");
-        return;
+    /* ============ GLB MODEL IMPORT ============ */
+    function arrayBufferToBase64(buf) {
+      const bytes = new Uint8Array(buf);
+      let s = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) {
+        s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
       }
-
-      const isSupported = await navigator.xr.isSessionSupported('immersive-vr');
-      if (!isSupported) {
-        showEnginePopup("VR device or WebXR VR session is not available.");
-        return;
-      }
-
-      const spawnPoint = gameObjects.find(obj => obj.userData.primitiveType === 'spawnpoint');
-      if (spawnPoint) {
-        playerRig.position.copy(spawnPoint.position);
-        playerRig.rotation.y = spawnPoint.rotation.y;
-      } else {
-        playerRig.position.set(0, 0, 0);
-        playerRig.rotation.set(0, 0, 0);
-      }
-
-      verticalVelocity = 0;
-      isGrounded = false;
-      transformGizmo.detach();
-
+      return btoa(s);
+    }
+    function base64ToArrayBuffer(b64) {
+      const s = atob(b64);
+      const bytes = new Uint8Array(s.length);
+      for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
+      return bytes.buffer;
+    }
+    function importGLBFile(event) {
+      const file = event.target.files[0];
+      event.target.value = '';
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const buf = e.target.result;
+        try {
+          new THREE.GLTFLoader().parse(buf, '', function(gltf) {
+            const model = gltf.scene;
+            const base = (file.name || 'model').replace(/\.glb$/i, '');
+            model.name = base + '_' + (gameObjects.length + 1);
+            model.userData.primitiveType = 'glb';
+            model.userData.isGrabbable = false;
+            model.userData.glbData = arrayBufferToBase64(buf);
+            const bbox = new THREE.Box3().setFromObject(model);
+            model.position.y -= bbox.min.y;
+            model.traverse(function(n){ if (n.isMesh) n.castShadow = true; });
+            scene.add(model);
+            gameObjects.push(model);
+            selectObject(model);
+            updateHierarchy();
+          }, function() {
+            showEnginePopup('Could not load that .glb file.');
+          });
+        } catch (err) {
+          showEnginePopup('Could not load that .glb file.');
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+    function addGLBFromData(item) {
       try {
-        const session = await navigator.xr.requestSession('immersive-vr', {
-          optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking']
-        });
-
-        renderer.xr.setSession(session);
-
-        session.addEventListener('end', () => {
-          if (selectedObject) transformGizmo.attach(selectedObject);
-          releaseGrabbedObject(controller1);
-          releaseGrabbedObject(controller2);
+        const buf = base64ToArrayBuffer(item.glbData);
+        new THREE.GLTFLoader().parse(buf, '', function(gltf) {
+          const model = gltf.scene;
+          model.name = item.name;
+          model.userData.primitiveType = 'glb';
+          model.userData.isGrabbable = !!item.isGrabbable;
+          model.userData.glbData = item.glbData;
+          model.position.fromArray(item.position);
+          model.rotation.set(item.rotation[0], item.rotation[1], item.rotation[2]);
+          model.scale.fromArray(item.scale);
+          model.traverse(function(n){ if (n.isMesh) n.castShadow = true; });
+          scene.add(model);
+          gameObjects.push(model);
+          updateHierarchy();
+        }, function() {
+          showEnginePopup('A .glb model in the scene file could not be loaded.');
         });
       } catch (err) {
-        showEnginePopup("Failed to start VR session: " + err.message);
+        showEnginePopup('A .glb model in the scene file could not be loaded.');
       }
     }
 
-    // VR PHYSICS, JUMPING, COLLISION, & GRABBING LOGIC
-    let lastSnapTurn = 0;
-    let lastJumpPress = false;
-    let verticalVelocity = 0;
-    let isGrounded = false;
-    const gravity = 9.8;
-    const jumpStrength = 4.2;
+    /* ============ STANDALONE GAME EXPORT ============ */
+    function downloadBlob(blob, filename) {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+    }
+    function buildStandaloneHTML() {
+      const json = JSON.stringify(serializeScene()).replace(/<\//g, '<\\/');
+      const L = [
+        '<!DOCTYPE html>',
+        '<html lang="en">',
+        '<head>',
+        '<meta charset="UTF-8">',
+        '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
+        '<title>My AJG Game</title>',
+        '<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"><\/script>',
+        '<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"><\/script>',
+        '<style>',
+        'html,body{margin:0;height:100%;overflow:hidden;background:#87ceeb;font-family:sans-serif}',
+        '#ui{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.65);color:#fff;z-index:10;cursor:pointer}',
+        '#ui h1{margin:0 0 8px;font-size:34px}#ui p{margin:0;color:#ccc}',
+        '#hud{position:fixed;top:12px;left:12px;color:#fff;font-size:13px;text-shadow:0 1px 4px #000;z-index:5}',
+        '<\/style>',
+        '<\/head>',
+        '<body>',
+        '<div id="ui"><div style="text-align:center"><h1>My AJG Game</h1><p>Click to play &mdash; WASD move &middot; Mouse look &middot; Space jump<\/p><\/div><\/div>',
+        '<div id="hud">WASD move &middot; Space jump<\/div>',
+        '<script>',
+        'var SCENE=' + json + ';',
+        'var scene=new THREE.Scene();',
+        'scene.background=new THREE.Color(0x87ceeb);',
+        'scene.fog=new THREE.Fog(0x87ceeb,40,140);',
+        'var camera=new THREE.PerspectiveCamera(75,innerWidth/innerHeight,0.1,500);',
+        'var renderer=new THREE.WebGLRenderer({antialias:true});',
+        'renderer.setSize(innerWidth,innerHeight);',
+        'renderer.shadowMap.enabled=true;',
+        'document.body.appendChild(renderer.domElement);',
+        'scene.add(new THREE.HemisphereLight(0xffffff,0x445566,0.9));',
+        'var sun=new THREE.DirectionalLight(0xffffff,0.9);',
+        'sun.position.set(20,30,10);sun.castShadow=true;',
+        'scene.add(sun);',
+        'var solids=[];',
+        'var spawnPt=null;',
+        'function regBox(o){var b=new THREE.Box3().setFromObject(o);solids.push({x0:b.min.x,x1:b.max.x,y0:b.min.y,y1:b.max.y,z0:b.min.z,z1:b.max.z});}',
+        'SCENE.forEach(function(it){',
+        'var o=null;',
+        'if(it.type==="cube"){o=new THREE.Mesh(new THREE.BoxGeometry(1,1,1),new THREE.MeshStandardMaterial({color:it.color,roughness:.7}));}',
+        'else if(it.type==="sphere"){o=new THREE.Mesh(new THREE.SphereGeometry(0.6,24,18),new THREE.MeshStandardMaterial({color:it.color,roughness:.7}));}',
+        'else if(it.type==="spawnpoint"){spawnPt=it;return;}',
+        'else if(it.type==="glb"&&it.glbData){',
+        '(function(){var s=atob(it.glbData);var u=new Uint8Array(s.length);for(var i=0;i<s.length;i++)u[i]=s.charCodeAt(i);',
+        'new THREE.GLTFLoader().parse(u.buffer,"",function(g){var m=g.scene;',
+        'm.position.set(it.position[0],it.position[1],it.position[2]);',
+        'm.rotation.set(it.rotation[0],it.rotation[1],it.rotation[2]);',
+        'm.scale.set(it.scale[0],it.scale[1],it.scale[2]);',
+        'm.traverse(function(n){if(n.isMesh)n.castShadow=true;});',
+        'scene.add(m);regBox(m);});})();return;}',
+        'if(!o)return;',
+        'o.position.set(it.position[0],it.position[1],it.position[2]);',
+        'o.rotation.set(it.rotation[0],it.rotation[1],it.rotation[2]);',
+        'o.scale.set(it.scale[0],it.scale[1],it.scale[2]);',
+        'o.castShadow=true;o.receiveShadow=true;',
+        'scene.add(o);regBox(o);});',
+        'var pos=new THREE.Vector3(0,0,6),vel=new THREE.Vector3(),yaw=0,pitch=0,grounded=false;',
+        'if(spawnPt){pos.set(spawnPt.position[0],Math.max(spawnPt.position[1]+0.1,0.1),spawnPt.position[2]);yaw=spawnPt.rotation[1]||0;}',
+        'var keys={};',
+        'addEventListener("keydown",function(e){keys[e.code]=true;if(e.code==="Space")e.preventDefault();});',
+        'addEventListener("keyup",function(e){keys[e.code]=false;});',
+        'var locked=false;',
+        'document.getElementById("ui").addEventListener("click",function(){document.getElementById("ui").style.display="none";renderer.domElement.requestPointerLock();});',
+        'document.addEventListener("pointerlockchange",function(){locked=document.pointerLockElement===renderer.domElement;if(!locked)document.getElementById("ui").style.display="flex";});',
+        'document.addEventListener("mousemove",function(e){if(!locked)return;yaw-=e.movementX*0.0022;pitch-=e.movementY*0.0022;pitch=Math.max(-1.45,Math.min(1.45,pitch));});',
+        'addEventListener("resize",function(){camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});',
+        'var R=0.45;',
+        'function supportAt(x,z,fy){var s=0;for(var i=0;i<solids.length;i++){var b=solids[i];if(x>b.x0-R&&x<b.x1+R&&z>b.z0-R&&z<b.z1+R&&b.y1<=fy+0.55&&b.y1>s)s=b.y1;}return s;}',
+        'function collideH(){for(var i=0;i<solids.length;i++){var b=solids[i];if(pos.y+1.6<b.y0||pos.y>b.y1-0.35)continue;var a=b.x0-R,c=b.x1+R,d=b.z0-R,e=b.z1+R;if(pos.x>a&&pos.x<c&&pos.z>d&&pos.z<e){var l=pos.x-a,r=c-pos.x,t=pos.z-d,n=e-pos.z;var m=Math.min(l,r,t,n);if(m===l)pos.x=a;else if(m===r)pos.x=c;else if(m===t)pos.z=d;else pos.z=e;}}}',
+        'var pclock=new THREE.Clock();',
+        'var fwd=new THREE.Vector3(),rgt=new THREE.Vector3();',
+        '(function tick(){requestAnimationFrame(tick);var dt=Math.min(pclock.getDelta(),0.05);',
+        'if(locked){',
+        'camera.quaternion.setFromEuler(new THREE.Euler(pitch,yaw,0,"YXZ"));',
+        'fwd.set(-Math.sin(yaw),0,-Math.cos(yaw));rgt.set(Math.cos(yaw),0,-Math.sin(yaw));',
+        'var sp=(keys["ShiftLeft"]||keys["ShiftRight"])?9:5.5;',
+        'var ix=((keys["KeyD"]||keys["ArrowRight"])?1:0)-((keys["KeyA"]||keys["ArrowLeft"])?1:0);',
+        'var iz=((keys["KeyW"]||keys["ArrowUp"])?1:0)-((keys["KeyS"]||keys["ArrowDown"])?1:0);',
+        'var tx=(fwd.x*iz+rgt.x*ix)*sp,tz=(fwd.z*iz+rgt.z*ix)*sp;',
+        'var k=1-Math.pow(0.0001,dt);vel.x+=(tx-vel.x)*k;vel.z+=(tz-vel.z)*k;',
+        'vel.y-=22*dt;',
+        'if(grounded&&keys["Space"]){vel.y=8.6;grounded=false;}',
+        'pos.x+=vel.x*dt;collideH();pos.z+=vel.z*dt;collideH();pos.y+=vel.y*dt;',
+        'var s=supportAt(pos.x,pos.z,pos.y);',
+        'if(pos.y<=s){pos.y=s;vel.y=0;grounded=true;}else grounded=false;',
+        '}',
+        'camera.position.set(pos.x,pos.y+1.65,pos.z);',
+        'renderer.render(scene,camera);})();',
+        '<\/script>',
+        '<\/body>',
+        '<\/html>'
+      ];
+      return L.join('\n');
+    }
+    function downloadHTML() {
+      downloadBlob(new Blob([buildStandaloneHTML()], {type: 'text/html'}), 'ajg-game.html');
+      showEnginePopup('Downloaded ajg-game.html — open it in any browser to play!');
+    }
 
-    const controller1Grab = { object: null };
-    const controller2Grab = { object: null };
-    const vrRaycaster = new THREE.Raycaster();
-
-    function tryGrabObject(controller, grabState) {
-      if (grabState.object) return;
-
-      const controllerPos = new THREE.Vector3();
-      controller.getWorldPosition(controllerPos);
-
-      // 1. Proximity Check via Bounding Boxes
-      let closestObj = null;
-      let minDistance = Infinity;
-
-      gameObjects.forEach(obj => {
-        if (!obj.userData.isGrabbable || obj.userData.primitiveType === 'spawnpoint') return;
-
-        const objBox = new THREE.Box3().setFromObject(obj);
-        objBox.expandByScalar(0.15);
-
-        if (objBox.containsPoint(controllerPos)) {
-          const center = new THREE.Vector3();
-          objBox.getCenter(center);
-          const dist = controllerPos.distanceTo(center);
-          if (dist < minDistance) {
-            minDistance = dist;
-            closestObj = obj;
-          }
-        }
+    /* ============ EXE EXPORT (zip game package) ============ */
+    const CRC_T = (function(){
+      const t = new Uint32Array(256);
+      for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        t[n] = c >>> 0;
+      }
+      return t;
+    })();
+    function crc32u8(u8) {
+      let c = 0xFFFFFFFF;
+      for (let i = 0; i < u8.length; i++) c = CRC_T[(c ^ u8[i]) & 255] ^ (c >>> 8);
+      return (c ^ 0xFFFFFFFF) >>> 0;
+    }
+    function buildZip(files) {
+      const out = [];
+      const cd = [];
+      let off = 0;
+      const w16 = v => out.push(v & 255, (v >>> 8) & 255);
+      const w32 = v => out.push(v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255);
+      const wb = u8 => { for (let i = 0; i < u8.length; i++) out.push(u8[i]); };
+      const enc = new TextEncoder();
+      files.forEach(f => {
+        const nb = enc.encode(f.name);
+        const crc = crc32u8(f.data);
+        const lo = off;
+        w32(0x04034b50); w16(20); w16(0x0800); w16(0); w16(0); w16(0);
+        w32(crc); w32(f.data.length); w32(f.data.length);
+        w16(nb.length); w16(0);
+        wb(nb); wb(f.data);
+        off += 30 + nb.length + f.data.length;
+        const e = [];
+        const e16 = v => e.push(v & 255, (v >>> 8) & 255);
+        const e32 = v => e.push(v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255);
+        e32(0x02014b50); e16(20); e16(20); e16(0x0800); e16(0); e16(0); e16(0);
+        e32(crc); e32(f.data.length); e32(f.data.length);
+        e16(nb.length); e16(0); e16(0); e16(0); e16(0); e32(0); e32(lo);
+        for (let i = 0; i < nb.length; i++) e.push(nb[i]);
+        cd.push(e);
       });
-
-      // 2. Fallback: Controller Raycast Grab
-      if (!closestObj) {
-        const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(controller.quaternion);
-        vrRaycaster.set(controllerPos, dir);
-        vrRaycaster.far = 4.0;
-        
-        const grabbables = gameObjects.filter(o => o.userData.isGrabbable && o.userData.primitiveType !== 'spawnpoint');
-        const hits = vrRaycaster.intersectObjects(grabbables, true);
-
-        if (hits.length > 0) {
-          let hitObj = hits[0].object;
-          while (hitObj.parent && hitObj.parent !== scene && gameObjects.includes(hitObj.parent)) {
-            hitObj = hitObj.parent;
-          }
-          closestObj = hitObj;
-        }
-      }
-
-      if (closestObj) {
-        grabState.object = closestObj;
-        controller.attach(closestObj);
-      }
+      const cdOff = off;
+      let cdSize = 0;
+      cd.forEach(e => { for (let i = 0; i < e.length; i++) out.push(e[i]); cdSize += e.length; });
+      w32(0x06054b50); w16(0); w16(0);
+      w16(files.length); w16(files.length);
+      w32(cdSize); w32(cdOff); w16(0);
+      return new Uint8Array(out);
     }
-
-    function releaseGrabbedObject(controller) {
-      const grabState = (controller === controller1) ? controller1Grab : controller2Grab;
-      if (grabState.object) {
-        scene.attach(grabState.object);
-        grabState.object = null;
-      }
-    }
-
-    function handleVRPhysicsAndMovement(delta) {
-      const session = renderer.xr.getSession();
-      if (!session) return;
-
-      let moveDirection = new THREE.Vector3(0, 0, 0);
-
-      for (const source of session.inputSources) {
-        if (source.gamepad) {
-          const axes = source.gamepad.axes;
-          const buttons = source.gamepad.buttons;
-
-          const controller = (source.handedness === 'left') ? controller1 : controller2;
-          const grabState = (source.handedness === 'left') ? controller1Grab : controller2Grab;
-
-          // TRIGGER BUTTON (Index 0): Grabbing
-          const triggerPressed = buttons[0] && (buttons[0].pressed || buttons[0].value > 0.1);
-          if (triggerPressed) {
-            tryGrabObject(controller, grabState);
-          } else {
-            releaseGrabbedObject(controller);
-          }
-
-          // LEFT CONTROLLER: THUMBSTICK MOVEMENT
-          if (source.handedness === 'left' && axes.length >= 4) {
-            const xAxis = axes[2] || axes[0];
-            const zAxis = axes[3] || axes[1];
-
-            if (Math.abs(xAxis) > 0.1 || Math.abs(zAxis) > 0.1) {
-              const inputVec = new THREE.Vector3(xAxis, 0, zAxis);
-              const headEul = new THREE.Euler(0, 0, 0, 'YXZ');
-              headEul.setFromQuaternion(camera.quaternion);
-              inputVec.applyEuler(new THREE.Euler(0, headEul.y + playerRig.rotation.y, 0));
-              moveDirection.add(inputVec);
-            }
-          }
-
-          // RIGHT CONTROLLER: SNAP TURN & A-BUTTON JUMPING
-          if (source.handedness === 'right') {
-            if (axes.length >= 4) {
-              const xAxis = axes[2] || axes[0];
-              const now = performance.now();
-              if (Math.abs(xAxis) > 0.6 && now - lastSnapTurn > 300) {
-                playerRig.rotation.y -= Math.sign(xAxis) * (Math.PI / 4);
-                lastSnapTurn = now;
-              }
-            }
-
-            // A BUTTON: JUMPING
-            const aButtonPressed = (buttons[4] && buttons[4].pressed) || (buttons[0] && buttons[0].pressed && source.handedness === 'right');
-            if (aButtonPressed && !lastJumpPress && isGrounded) {
-              verticalVelocity = jumpStrength;
-              isGrounded = false;
-            }
-            lastJumpPress = aButtonPressed;
-          }
-        }
-      }
-
-      // APPLY HORIZONTAL MOVEMENT WITH COLLISION
-      if (moveDirection.lengthSq() > 0) {
-        moveDirection.normalize();
-        const moveSpeed = 2.5 * delta;
-        const proposedPos = playerRig.position.clone().addScaledVector(moveDirection, moveSpeed);
-
-        let isColliding = false;
-        const playerRadius = 0.3;
-
-        for (const obj of gameObjects) {
-          if (obj.userData.primitiveType === 'spawnpoint') continue;
-          if (obj === controller1Grab.object || obj === controller2Grab.object) continue;
-
-          const objBox = new THREE.Box3().setFromObject(obj);
-          const expandedBox = objBox.clone().expandByScalar(playerRadius);
-
-          if (expandedBox.containsPoint(new THREE.Vector3(proposedPos.x, proposedPos.y + 0.5, proposedPos.z))) {
-            isColliding = true;
-            break;
-          }
-        }
-
-        if (!isColliding) {
-          playerRig.position.x = proposedPos.x;
-          playerRig.position.z = proposedPos.z;
-        }
-      }
-
-      // APPLY GRAVITY & VERTICAL MOVEMENT
-      verticalVelocity -= gravity * delta;
-      playerRig.position.y += verticalVelocity * delta;
-
-      // GROUND RAYCASTING COLLISION
-      const downRay = new THREE.Raycaster(
-        new THREE.Vector3(playerRig.position.x, playerRig.position.y + 1, playerRig.position.z),
-        new THREE.Vector3(0, -1, 0)
-      );
-
-      const filterObjects = gameObjects.filter(o => o !== controller1Grab.object && o !== controller2Grab.object);
-      const intersects = downRay.intersectObjects(filterObjects, true);
-      let groundHeight = 0;
-
-      if (intersects.length > 0) {
-        groundHeight = intersects[0].point.y;
-      }
-
-      if (playerRig.position.y <= groundHeight) {
-        playerRig.position.y = groundHeight;
-        verticalVelocity = 0;
-        isGrounded = true;
-      }
+    function downloadEXE() {
+      const enc = new TextEncoder();
+      const htmlBytes = enc.encode(buildStandaloneHTML());
+      const batText = '@echo off\r\ntitle My AJG Game\r\nstart "" "%~dp0game.html"\r\n';
+      const zip = buildZip([
+        { name: 'game.html', data: htmlBytes },
+        { name: 'Play Game.bat', data: enc.encode(batText) }
+      ]);
+      downloadBlob(new Blob([zip], {type: 'application/zip'}), 'ajg-game.zip');
+      showEnginePopup('Downloaded ajg-game.zip! Unzip it, then double-click "Play Game" to play.');
     }
 
     function cloneSelected() {
@@ -595,7 +583,7 @@
 
     function selectObject(obj) {
       selectedObject = obj;
-      if (obj && !renderer.xr.isPresenting) transformGizmo.attach(obj);
+      if (obj) transformGizmo.attach(obj);
       else transformGizmo.detach();
       updateHierarchy();
       updateInspector();
@@ -611,6 +599,7 @@
         let icon = '📦';
         if (obj.userData.primitiveType === 'sphere') icon = '🔮';
         if (obj.userData.primitiveType === 'spawnpoint') icon = '📍';
+        if (obj.userData.primitiveType === 'glb') icon = '🧊';
 
         div.innerText = `${icon} ${obj.name}`;
         div.onclick = () => selectObject(obj);
@@ -632,7 +621,13 @@
         currentColor = `#${selectedObject.children[0].material.color.getHexString()}`;
       }
 
-      const isGrabbableChecked = !!selectedObject.userData.isGrabbable ? 'checked' : '';
+      const isGLB = selectedObject.userData.primitiveType === 'glb';
+      const matSection = isGLB ? '' : `
+        <div class="section-header">Material</div>
+        <div class="prop-row"><label>Color</label>
+          <input type="color" id="matColor" value="${currentColor}" oninput="updateSelectedColor(this.value)">
+        </div>
+      `;
 
       panel.innerHTML = `
         <div class="prop-row"><label>Name</label><input type="text" id="inpName" value="${selectedObject.name}" onchange="selectedObject.name=this.value; updateHierarchy();"></div>
@@ -664,15 +659,7 @@
           </div>
         </div>
 
-        <div class="section-header">Material</div>
-        <div class="prop-row"><label>Color</label>
-          <input type="color" id="matColor" value="${currentColor}" oninput="updateSelectedColor(this.value)">
-        </div>
-
-        <div class="section-header">VR Interaction</div>
-        <div class="prop-row"><label>Grabbable</label>
-          <input type="checkbox" id="chkGrabbable" ${isGrabbableChecked} onchange="selectedObject.userData.isGrabbable = this.checked;">
-        </div>
+        ${matSection}
       `;
 
       updateInspectorValues();
@@ -723,17 +710,9 @@
       );
     }
 
-    // Main Loop with Delta Time calculation
-    const clock = new THREE.Clock();
-
+    // Main Loop
     renderer.setAnimationLoop(() => {
-      const delta = clock.getDelta();
-
-      if (renderer.xr.isPresenting) {
-        handleVRPhysicsAndMovement(delta);
-      } else {
-        orbit.update();
-      }
+      orbit.update();
       renderer.render(scene, camera);
     });
 
