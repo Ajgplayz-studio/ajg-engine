@@ -26,6 +26,9 @@
     .btn.active { background: #007acc; border-color: #007acc; color: #fff; }
     .btn-action { background: #2d5a88; border-color: #007acc; }
     .btn-danger { background: #882d2d; border-color: #ef4444; }
+    .opt { display:flex; align-items:center; gap:5px; font-size:11px; color:#aaa; white-space:nowrap; cursor:pointer; flex-shrink:0; }
+    .opt input[type=color] { width:26px; height:20px; padding:0; border:1px solid #555; background:#1e1e1e; cursor:pointer; }
+    .opt input[type=checkbox] { cursor:pointer; }
     
     .item { padding: 6px 8px; cursor: pointer; border-radius: 3px; font-size: 13px; margin-top: 2px; }
     .item.selected { background: #094771; color: #fff; border-left: 3px solid #007acc; }
@@ -71,8 +74,11 @@
     <button class="btn btn-action" onclick="exportSceneFile()">⬇ Export .ajg</button>
     <button class="btn btn-action" onclick="document.getElementById('fileInput').click()">⬆ Import .ajg</button>
     <button class="btn btn-action" onclick="document.getElementById('glbInput').click()">📦 Import .glb</button>
+    <button class="btn btn-action" onclick="previewGame()">▶ Preview</button>
     <button class="btn btn-action" onclick="downloadHTML()">🎮 Download HTML</button>
     <button class="btn btn-action" onclick="downloadEXE()">💾 Download EXE</button>
+    <label class="opt" title="Skybox color for Preview & downloads"><input type="color" id="optSky" value="#87ceeb"> Sky</label>
+    <label class="opt" title="Show grid in Preview & downloads"><input type="checkbox" id="optGrid"> Grid</label>
     <input type="file" id="fileInput" accept=".ajg,.json" style="display:none;" onchange="importSceneFile(event)">
     <input type="file" id="glbInput" accept=".glb" style="display:none;" onchange="importGLBFile(event)">
     
@@ -111,6 +117,11 @@
         <button class="engine-modal-btn" onclick="closeEnginePopup()">OK</button>
       </div>
     </div>
+  </div>
+
+  <div id="preview-overlay" style="display:none;position:fixed;inset:0;z-index:10000;background:#000;">
+    <button onclick="closePreview()" style="position:absolute;top:12px;right:12px;z-index:10001;background:#882d2d;color:#fff;border:1px solid #ef4444;padding:8px 16px;border-radius:4px;cursor:pointer;font-size:13px;font-weight:bold;">✕ Close preview</button>
+    <iframe id="preview-frame" allow="pointer-lock" style="width:100%;height:100%;border:none;"></iframe>
   </div>
 
   <script>
@@ -386,6 +397,8 @@
     }
     function buildStandaloneHTML() {
       const json = JSON.stringify(serializeScene()).replace(/<\//g, '<\\/');
+      const sky = (document.getElementById('optSky') && document.getElementById('optSky').value) || '#87ceeb';
+      const showGrid = document.getElementById('optGrid') && document.getElementById('optGrid').checked;
       const L = [
         '<!DOCTYPE html>',
         '<html lang="en">',
@@ -408,8 +421,8 @@
         '<script>',
         'var SCENE=' + json + ';',
         'var scene=new THREE.Scene();',
-        'scene.background=new THREE.Color(0x87ceeb);',
-        'scene.fog=new THREE.Fog(0x87ceeb,40,140);',
+        'scene.background=new THREE.Color("' + sky + '");',
+        'scene.fog=new THREE.Fog("' + sky + '",40,140);',
         'var camera=new THREE.PerspectiveCamera(75,innerWidth/innerHeight,0.1,500);',
         'var renderer=new THREE.WebGLRenderer({antialias:true});',
         'renderer.setSize(innerWidth,innerHeight);',
@@ -419,6 +432,7 @@
         'var sun=new THREE.DirectionalLight(0xffffff,0.9);',
         'sun.position.set(20,30,10);sun.castShadow=true;',
         'scene.add(sun);',
+        ...(showGrid ? ['scene.add(new THREE.GridHelper(60,60,0xffffff,0xbbbbbb));'] : []),
         'var solids=[];',
         'var spawnPt=null;',
         'function regBox(o){var b=new THREE.Box3().setFromObject(o);solids.push({x0:b.min.x,x1:b.max.x,y0:b.min.y,y1:b.max.y,z0:b.min.z,z1:b.max.z});}',
@@ -441,8 +455,9 @@
         'o.scale.set(it.scale[0],it.scale[1],it.scale[2]);',
         'o.castShadow=true;o.receiveShadow=true;',
         'scene.add(o);regBox(o);});',
+        'var R=0.45;',
         'var pos=new THREE.Vector3(0,0,6),vel=new THREE.Vector3(),yaw=0,pitch=0,grounded=false;',
-        'if(spawnPt){pos.set(spawnPt.position[0],Math.max(spawnPt.position[1]+0.1,0.1),spawnPt.position[2]);yaw=spawnPt.rotation[1]||0;}',
+        '(function(){var sx=0,sz=6,sy=0.1;if(spawnPt){sx=spawnPt.position[0];sz=spawnPt.position[2];sy=spawnPt.position[1];yaw=spawnPt.rotation[1]||0;}var g=supportAt(sx,sz,sy+1.0);pos.set(sx,Math.max(sy+0.05,g),sz);})();',
         'var keys={};',
         'addEventListener("keydown",function(e){keys[e.code]=true;if(e.code==="Space")e.preventDefault();});',
         'addEventListener("keyup",function(e){keys[e.code]=false;});',
@@ -451,7 +466,6 @@
         'document.addEventListener("pointerlockchange",function(){locked=document.pointerLockElement===renderer.domElement;if(!locked)document.getElementById("ui").style.display="flex";});',
         'document.addEventListener("mousemove",function(e){if(!locked)return;yaw-=e.movementX*0.0022;pitch-=e.movementY*0.0022;pitch=Math.max(-1.45,Math.min(1.45,pitch));});',
         'addEventListener("resize",function(){camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});',
-        'var R=0.45;',
         'function supportAt(x,z,fy){var s=0;for(var i=0;i<solids.length;i++){var b=solids[i];if(x>b.x0-R&&x<b.x1+R&&z>b.z0-R&&z<b.z1+R&&b.y1<=fy+0.55&&b.y1>s)s=b.y1;}return s;}',
         'function collideH(){for(var i=0;i<solids.length;i++){var b=solids[i];if(pos.y+1.6<b.y0||pos.y>b.y1-0.35)continue;var a=b.x0-R,c=b.x1+R,d=b.z0-R,e=b.z1+R;if(pos.x>a&&pos.x<c&&pos.z>d&&pos.z<e){var l=pos.x-a,r=c-pos.x,t=pos.z-d,n=e-pos.z;var m=Math.min(l,r,t,n);if(m===l)pos.x=a;else if(m===r)pos.x=c;else if(m===t)pos.z=d;else pos.z=e;}}}',
         'var pclock=new THREE.Clock();',
@@ -478,6 +492,19 @@
         '<\/html>'
       ];
       return L.join('\n');
+    }
+    function previewGame() {
+      const url = URL.createObjectURL(new Blob([buildStandaloneHTML()], {type: 'text/html'}));
+      const overlay = document.getElementById('preview-overlay');
+      document.getElementById('preview-frame').src = url;
+      overlay.style.display = 'block';
+      overlay.dataset.url = url;
+    }
+    function closePreview() {
+      const overlay = document.getElementById('preview-overlay');
+      document.getElementById('preview-frame').src = 'about:blank';
+      overlay.style.display = 'none';
+      if (overlay.dataset.url) { URL.revokeObjectURL(overlay.dataset.url); overlay.dataset.url = ''; }
     }
     function downloadHTML() {
       downloadBlob(new Blob([buildStandaloneHTML()], {type: 'text/html'}), 'ajg-game.html');
