@@ -8,7 +8,7 @@
     location.replace('https://ajg-engine.foxcorpgames.workers.dev/' + location.search + location.hash);
   }
   </script>
-  <title>AJG ENGINE v2.2</title>
+  <title>AJG ENGINE v2.3</title>
   <!-- Three.js, OrbitControls, TransformControls, GLTFLoader -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
@@ -91,7 +91,7 @@
 <body>
 
   <div id="toolbar">
-    <div class="brand-title">⚡ AJG ENGINE <span class="brand-badge">v2.2</span></div>
+    <div class="brand-title">⚡ AJG ENGINE <span class="brand-badge">v2.3</span></div>
     <div style="height:16px; width:1px; background:#444;"></div>
     
     <button class="btn btn-action" onclick="exportSceneFile()">⬇ Export .ajg</button>
@@ -119,6 +119,7 @@
     <button class="btn" onclick="addPrimitive('cube')">+ Cube</button>
     <button class="btn" onclick="addPrimitive('sphere')">+ Sphere</button>
     <button class="btn" onclick="addPrimitive('spawnpoint')">📍 + Spawn Point</button>
+    <button class="btn" onclick="addPrimitive('watch')">⌚ + Watch</button>
   </div>
 
   <div id="editor">
@@ -153,7 +154,7 @@
         <div class="blocks-palette" id="blocksPalette"></div>
         <textarea id="codeEditor" spellcheck="false" oninput="gameCode=this.value" placeholder="// Type JavaScript here, or click the blocks on the left"></textarea>
       </div>
-      <div class="code-foot">Runs in Preview &amp; downloads · onStart · onUpdate(dt) · key("KeyW") · getObject(name) · moveObject(name,x,y,z) · setObjectPos(name,x,y,z) · after(sec,fn) · repeat(n,fn) · say(text)</div>
+      <div class="code-foot">Runs in Preview &amp; downloads · onStart · onUpdate(dt) · key("KeyW") · getObject(name) · getSteps() · onClick(name,fn) · moveObject(name,x,y,z) · setObjectPos(name,x,y,z) · after(sec,fn) · repeat(n,fn) · say(text)</div>
     </div>
   </div>
 
@@ -274,6 +275,37 @@
         mesh.add(arrowMesh);
 
         mesh.position.set(0, 0, 0);
+      } else if (typeName === 'watch') {
+        mesh = new THREE.Group();
+
+        const standGeo = new THREE.BoxGeometry(0.24, 0.34, 0.24);
+        const standMat = new THREE.MeshStandardMaterial({ color: 0x555566, roughness: 0.5 });
+        const standMesh = new THREE.Mesh(standGeo, standMat);
+        standMesh.position.y = 0.17;
+        mesh.add(standMesh);
+
+        const faceGeo = new THREE.CylinderGeometry(0.55, 0.55, 0.14, 28);
+        const faceMat = new THREE.MeshStandardMaterial({ color: 0x1a1f33, roughness: 0.35 });
+        const faceMesh = new THREE.Mesh(faceGeo, faceMat);
+        faceMesh.position.y = 0.62;
+        mesh.add(faceMesh);
+
+        const screenGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.15, 28);
+        const screenMat = new THREE.MeshStandardMaterial({ color: 0x8b5cf6, emissive: 0x8b5cf6, emissiveIntensity: 0.55, roughness: 0.3 });
+        const screenMesh = new THREE.Mesh(screenGeo, screenMat);
+        screenMesh.position.y = 0.62;
+        mesh.add(screenMesh);
+
+        const strapGeo = new THREE.BoxGeometry(0.34, 0.1, 0.72);
+        const strapMat = new THREE.MeshStandardMaterial({ color: 0x333344, roughness: 0.7 });
+        const strap1 = new THREE.Mesh(strapGeo, strapMat);
+        strap1.position.set(0, 0.6, 0.78);
+        mesh.add(strap1);
+        const strap2 = new THREE.Mesh(strapGeo, strapMat);
+        strap2.position.set(0, 0.6, -0.78);
+        mesh.add(strap2);
+
+        mesh.position.set(0, 0, 0);
       }
 
       mesh.name = name;
@@ -284,6 +316,12 @@
         mesh.position.fromArray(customData.position);
         mesh.rotation.fromArray(customData.rotation);
         mesh.scale.fromArray(customData.scale);
+      }
+
+      if (typeName === 'watch') {
+        mesh.userData.watchData = (customData && customData.watch)
+          ? customData.watch
+          : { title: 'My Watch', buttons: [] };
       }
 
       scene.add(mesh);
@@ -311,6 +349,7 @@
           isGrabbable: !!obj.userData.isGrabbable
         };
         if (item.type === 'glb' && obj.userData.glbData) item.glbData = obj.userData.glbData;
+        if (item.type === 'watch' && obj.userData.watchData) item.watch = obj.userData.watchData;
         return item;
       });
     }
@@ -374,6 +413,7 @@
       {cat:'Control', color:'#e8823a', label:'⏳ wait 1 sec', code:'after(1, () => {\n  \n});\n'},
       {cat:'Control', color:'#e8823a', label:'🔂 repeat 4', code:'repeat(4, (i) => {\n  \n});\n'},
       {cat:'Sensing', color:'#3ab8e8', label:'⌨️ if W pressed', code:'if (key("KeyW")) {\n  \n}\n'},
+      {cat:'Sensing', color:'#3ab8e8', label:'👆 when object clicked', code:'onClick("NAME", () => {\n  \n});\n'},
       {cat:'Looks', color:'#9a6ae8', label:'💬 say hello', code:'say("Hello!");\n'},
     ];
     function renderBlocks() {
@@ -495,7 +535,10 @@
       setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 2000);
     }
     function buildStandaloneHTML() {
-      const json = JSON.stringify(serializeScene()).replace(/<\//g, '<\\/');
+      const sceneData = serializeScene();
+      const json = JSON.stringify(sceneData).replace(/<\//g, '<\\/');
+      const watches = sceneData.filter(o => o.type === 'watch');
+      const watchesJson = JSON.stringify(watches).replace(/<\//g, '<\\/');
       const sky = (document.getElementById('optSky') && document.getElementById('optSky').value) || '#87ceeb';
       const showGrid = document.getElementById('optGrid') && document.getElementById('optGrid').checked;
       const L = [
@@ -516,8 +559,16 @@
         '<\/head>',
         '<body>',
         '<div id="ui"><div style="text-align:center"><h1>My AJG Game</h1><p>Click to play &mdash; WASD move &middot; Mouse look &middot; Space jump<\/p><\/div><\/div>',
-        '<div id="hud">WASD move &middot; Space jump<\/div>',
+        '<div id="hud">WASD move &middot; Space jump &middot; 👣 <span id="stepcount">0</span> steps<\/div>',
         '<div id="saybox" style="display:none;position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.75);color:#fff;padding:10px 22px;border-radius:12px;font-size:16px;z-index:6;"><\/div>',
+        '<button id="watchbtn" style="display:none;position:fixed;right:18px;bottom:18px;width:52px;height:52px;border-radius:50%;background:rgba(20,24,40,.85);border:1px solid rgba(255,255,255,.15);color:#fff;font-size:24px;z-index:7;cursor:pointer;">⌚<\/button>',
+        '<div id="watchui" style="display:none;position:fixed;inset:0;background:rgba(3,5,12,.55);z-index:20;align-items:center;justify-content:center;">',
+        '<div style="width:min(340px,90vw);background:linear-gradient(160deg,#1a1f33,#0d1120);border:2px solid rgba(139,92,246,.5);border-radius:28px;padding:26px 24px;text-align:center;color:#fff;box-shadow:0 0 60px rgba(139,92,246,.25);">',
+        '<div id="wtime" style="font-size:30px;font-weight:700;letter-spacing:2px;"><\/div>',
+        '<div id="wtitle" style="font-size:12px;color:#8b8e99;margin:4px 0 16px;"><\/div>',
+        '<div id="wbtns"><\/div>',
+        '<button id="wclose" style="display:block;width:100%;margin-top:6px;padding:12px;border-radius:14px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.1);color:#fff;font-size:15px;font-weight:700;cursor:pointer;">Close<\/button>',
+        '<\/div><\/div>',
         '<script>',
         'var SCENE=' + json + ';',
         'var scene=new THREE.Scene();',
@@ -533,7 +584,7 @@
         'sun.position.set(20,30,10);sun.castShadow=true;',
         'scene.add(sun);',
         ...(showGrid ? ['scene.add(new THREE.GridHelper(60,60,0xffffff,0xbbbbbb));'] : []),
-        'var solids=[];',
+        'var solids=[];var clickTargets=[];',
         'var spawnPt=null;',
         'function regBox(o){var b=new THREE.Box3().setFromObject(o);solids.push({x0:b.min.x,x1:b.max.x,y0:b.min.y,y1:b.max.y,z0:b.min.z,z1:b.max.z});}',
         'SCENE.forEach(function(it){',
@@ -541,6 +592,7 @@
         'if(it.type==="cube"){o=new THREE.Mesh(new THREE.BoxGeometry(1,1,1),new THREE.MeshStandardMaterial({color:it.color,roughness:.7}));}',
         'else if(it.type==="sphere"){o=new THREE.Mesh(new THREE.SphereGeometry(0.6,24,18),new THREE.MeshStandardMaterial({color:it.color,roughness:.7}));}',
         'else if(it.type==="spawnpoint"){spawnPt=it;return;}',
+        'else if(it.type==="watch"){return;}',
         'else if(it.type==="glb"&&it.glbData){',
         '(function(){var s=atob(it.glbData);var u=new Uint8Array(s.length);for(var i=0;i<s.length;i++)u[i]=s.charCodeAt(i);',
         'new THREE.GLTFLoader().parse(u.buffer,"",function(g){var m=g.scene;',
@@ -548,13 +600,13 @@
         'm.rotation.set(it.rotation[0],it.rotation[1],it.rotation[2]);',
         'm.scale.set(it.scale[0],it.scale[1],it.scale[2]);',
         'm.traverse(function(n){if(n.isMesh)n.castShadow=true;});',
-        'scene.add(m);regBox(m);});})();return;}',
+        'scene.add(m);regBox(m);m.userData.clickName=it.name;clickTargets.push(m);});})();return;}',
         'if(!o)return;',
         'o.position.set(it.position[0],it.position[1],it.position[2]);',
         'o.rotation.set(it.rotation[0],it.rotation[1],it.rotation[2]);',
         'o.scale.set(it.scale[0],it.scale[1],it.scale[2]);',
         'o.castShadow=true;o.receiveShadow=true;',
-        'scene.add(o);regBox(o);});',
+        'scene.add(o);regBox(o);o.userData.clickName=it.name;clickTargets.push(o);});',
         'var R=0.45;',
         'var pos=new THREE.Vector3(0,0,6),vel=new THREE.Vector3(),yaw=0,pitch=0,grounded=false;',
         '(function(){var sx=0,sz=6,sy=0.1;if(spawnPt){sx=spawnPt.position[0];sz=spawnPt.position[2];sy=spawnPt.position[1];yaw=spawnPt.rotation[1]||0;}var g=supportAt(sx,sz,sy+1.0);pos.set(sx,Math.max(sy+0.05,g),sz);})();',
@@ -571,19 +623,30 @@
         'var pclock=new THREE.Clock();',
         'var fwd=new THREE.Vector3(),rgt=new THREE.Vector3();',
         'var nameIndex={};',
-        'var __sc=[],__uc=[],__tm=[];',
+        'var __sc=[],__uc=[],__tm=[],__clickCbs={};',
+        'var stepCount=0,stepAcc=0,lastPX=null,lastPZ=0;',
         'function onStart(f){__sc.push(f);}',
         'function onUpdate(f){__uc.push(f);}',
         'function after(s,f){__tm.push({t:s,f:f});}',
         'function repeat(n,f){for(var i=0;i<n;i++){try{f(i);}catch(e){}}}',
         'function key(c){return !!keys[c];}',
         'function getObject(n){var o=nameIndex[n];if(!o){o=scene.getObjectByName(n);if(o)nameIndex[n]=o;}return o||null;}',
+        'function getSteps(){return stepCount;}',
+        'function onClick(n,f){(__clickCbs[n]=__clickCbs[n]||[]).push(f);}',
         'function moveObject(n,x,y,z){var o=getObject(n);if(o){o.position.x+=x;o.position.y+=y;o.position.z+=z;}}',
         'function setObjectPos(n,x,y,z){var o=getObject(n);if(o){o.position.set(x,y,z);}}',
         'function say(t){var b=document.getElementById("saybox");b.textContent=t;b.style.display="block";clearTimeout(b._h);b._h=setTimeout(function(){b.style.display="none";},2600);}',
+        'function runUserCode(code){try{(new Function("onStart","onUpdate","after","repeat","key","getObject","getSteps","onClick","moveObject","setObjectPos","say","scene","camera",code))(onStart,onUpdate,after,repeat,key,getObject,getSteps,onClick,moveObject,setObjectPos,say,scene,camera);}catch(e){say("Code error: "+e.message);}}',
         'var USER_CODE=' + JSON.stringify(gameCode).replace(/<\//g, '<\\/') + ';',
-        'try{(new Function("onStart","onUpdate","after","repeat","key","getObject","moveObject","setObjectPos","say","scene","camera",USER_CODE))(onStart,onUpdate,after,repeat,key,getObject,moveObject,setObjectPos,say,scene,camera);}catch(e){say("Code error: "+e.message);}',
+        'var WATCHES=' + watchesJson + ';',
+        'runUserCode(USER_CODE);',
         '__sc.forEach(function(f){try{f();}catch(e){say("Code error: "+e.message);}});',
+        'var wasLocked=false;',
+        'function openWatch(){wasLocked=locked;var d=new Date();document.getElementById("wtime").textContent=String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");document.getElementById("wtitle").textContent=WATCHES.map(function(w){return w.title;}).join(" · ");var c=document.getElementById("wbtns");c.innerHTML="";WATCHES.forEach(function(w){(w.buttons||[]).forEach(function(b){var btn=document.createElement("button");btn.textContent=b.label;btn.style.cssText="display:block;width:100%;margin:0 0 10px;padding:13px;border-radius:14px;border:1px solid rgba(255,255,255,.12);background:rgba(88,101,242,.9);color:#fff;font-size:15px;font-weight:700;cursor:pointer;";btn.onclick=(function(code){return function(){runUserCode(code);};})(b.code);c.appendChild(btn);});});var wu=document.getElementById("watchui");wu.style.display="flex";if(document.pointerLockElement)document.exitPointerLock();}',
+        'function closeWatch(){document.getElementById("watchui").style.display="none";if(wasLocked&&!document.pointerLockElement)renderer.domElement.requestPointerLock();}',
+        'if(WATCHES.length){document.getElementById("watchbtn").style.display="block";document.getElementById("watchbtn").onclick=openWatch;document.getElementById("wclose").onclick=closeWatch;document.addEventListener("keydown",function(e){if(e.code==="Tab"){e.preventDefault();var wu=document.getElementById("watchui");if(wu.style.display==="flex")closeWatch();else openWatch();}});}',
+        'var __rc=new THREE.Raycaster(),__cv=new THREE.Vector2(0,0);',
+        'document.addEventListener("mousedown",function(e){if(!locked||e.button!==0)return;__rc.setFromCamera(__cv,camera);var hits=__rc.intersectObjects(clickTargets,true);if(hits.length){var o=hits[0].object;while(o&&!o.userData.clickName)o=o.parent;if(o){var cbs=__clickCbs[o.userData.clickName];if(cbs)cbs.forEach(function(f){try{f();}catch(e){}});}}});',
         '(function tick(){requestAnimationFrame(tick);var dt=Math.min(pclock.getDelta(),0.05);',
         'if(locked){',
         'camera.quaternion.setFromEuler(new THREE.Euler(pitch,yaw,0,"YXZ"));',
@@ -601,6 +664,9 @@
         '}',
         'for(var ti=__tm.length-1;ti>=0;ti--){__tm[ti].t-=dt;if(__tm[ti].t<=0){var ff=__tm[ti].f;__tm.splice(ti,1);try{ff();}catch(e){}}}',
         'for(var ui=0;ui<__uc.length;ui++){try{__uc[ui](dt);}catch(e){}}',
+        'if(lastPX===null){lastPX=pos.x;lastPZ=pos.z;}',
+        'var sdx=pos.x-lastPX,sdz=pos.z-lastPZ;lastPX=pos.x;lastPZ=pos.z;stepAcc+=Math.sqrt(sdx*sdx+sdz*sdz);',
+        'if(stepAcc>=2){stepCount+=Math.floor(stepAcc/2);stepAcc=stepAcc%2;var sc=document.getElementById("stepcount");if(sc)sc.textContent=stepCount;}',
         'camera.position.set(pos.x,pos.y+1.65,pos.z);',
         'renderer.render(scene,camera);})();',
         '<\/script>',
@@ -743,6 +809,7 @@
         if (obj.userData.primitiveType === 'sphere') icon = '🔮';
         if (obj.userData.primitiveType === 'spawnpoint') icon = '📍';
         if (obj.userData.primitiveType === 'glb') icon = '🧊';
+        if (obj.userData.primitiveType === 'watch') icon = '⌚';
 
         div.innerText = `${icon} ${obj.name}`;
         div.onclick = () => selectObject(obj);
@@ -765,12 +832,32 @@
       }
 
       const isGLB = selectedObject.userData.primitiveType === 'glb';
-      const matSection = isGLB ? '' : `
+      const isWatch = selectedObject.userData.primitiveType === 'watch';
+      const matSection = (isGLB || isWatch) ? '' : `
         <div class="section-header">Material</div>
         <div class="prop-row"><label>Color</label>
           <input type="color" id="matColor" value="${currentColor}" oninput="updateSelectedColor(this.value)">
         </div>
       `;
+      const wd = selectedObject.userData.watchData || { title: 'My Watch', buttons: [] };
+      const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+      const watchSection = isWatch ? `
+        <div class="section-header">⌚ Watch Buttons</div>
+        <div class="prop-row"><label>Title</label>
+          <input type="text" value="${esc(wd.title)}" onchange="setWatchTitle(this.value)" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+        </div>
+        <div id="watchBtnList">${wd.buttons.length ? wd.buttons.map((b, i) => `
+          <div class="prop-row"><label style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(b.label)}</label>
+            <button class="btn btn-danger" onclick="delWatchButton(${i})">✕</button>
+          </div>`).join('') : '<div style="font-size:11px;color:#666;margin-bottom:6px;">No buttons yet — add one below.</div>'}
+        </div>
+        <div class="prop-row"><label>Label</label>
+          <input type="text" id="newBtnLabel" placeholder="Button text" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+        </div>
+        <div class="prop-row"><label>Code</label></div>
+        <textarea id="newBtnCode" rows="3" placeholder='say("Hello!");' style="width:100%;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:6px;border-radius:2px;font-size:11px;font-family:Consolas,monospace;resize:vertical;"></textarea>
+        <button class="btn btn-action" style="margin-top:6px;" onclick="addWatchButton()">+ Add button</button>
+      ` : '';
 
       panel.innerHTML = `
         <div class="prop-row"><label>Name</label><input type="text" id="inpName" value="${selectedObject.name}" onchange="selectedObject.name=this.value; updateHierarchy();"></div>
@@ -803,9 +890,30 @@
         </div>
 
         ${matSection}
+        ${watchSection}
       `;
 
       updateInspectorValues();
+    }
+
+    function setWatchTitle(v) {
+      if (selectedObject && selectedObject.userData.watchData) selectedObject.userData.watchData.title = v;
+    }
+    function addWatchButton() {
+      if (!selectedObject || !selectedObject.userData.watchData) return;
+      const l = document.getElementById('newBtnLabel');
+      const c = document.getElementById('newBtnCode');
+      selectedObject.userData.watchData.buttons.push({
+        label: ((l && l.value) || 'Button').trim() || 'Button',
+        code: (c && c.value) || ''
+      });
+      updateInspector();
+    }
+    function delWatchButton(i) {
+      if (selectedObject && selectedObject.userData.watchData) {
+        selectedObject.userData.watchData.buttons.splice(i, 1);
+        updateInspector();
+      }
     }
 
     function updateSelectedColor(colorHex) {
