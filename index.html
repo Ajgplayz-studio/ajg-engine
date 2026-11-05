@@ -179,6 +179,11 @@
         <button class="btn pixel-size" data-size="32" onclick="setPixelSize(32)">32×32</button>
         <span style="font-size:11px;color:#666;">(changing size starts a new picture)</span>
       </div>
+      <div id="pixelFacePicker" style="display:none;margin-top:10px;border:1px solid #3c3c3c;border-radius:8px;padding:10px;">
+        <div style="font-size:12px;font-weight:bold;color:#007acc;">Which faces do you want to paint?</div>
+        <div style="font-size:11px;color:#888;margin:2px 0 8px;">Pick one or more — the same picture goes on every face you pick. Press Q to show or hide this.</div>
+        <div id="pixelFaceChecks" style="display:flex;gap:14px;justify-content:center;flex-wrap:wrap;"></div>
+      </div>
       <canvas id="pixelCanvas" width="320" height="320"></canvas>
       <div style="display:flex;gap:6px;justify-content:center;flex-wrap:wrap;margin-bottom:8px;">
         <button class="btn pixel-tool active" id="toolBrush" onclick="setPixelTool('brush')">🖌️ Brush</button>
@@ -385,8 +390,13 @@
     function serializeScene() {
       return gameObjects.map(obj => {
         let hexColor = '#007acc';
-        if (obj.material) {
-          hexColor = `#${obj.material.color.getHexString()}`;
+        // A painted cube stores its plain color, so the save keeps the base
+        // color (not the white of its painted faces).
+        if (obj.userData.pixelArtBaseColor) {
+          hexColor = obj.userData.pixelArtBaseColor;
+        } else if (obj.material) {
+          const m0 = Array.isArray(obj.material) ? obj.material[0] : obj.material;
+          if (m0 && m0.color) hexColor = `#${m0.color.getHexString()}`;
         } else if (obj.children && obj.children[0] && obj.children[0].material) {
           hexColor = `#${obj.children[0].material.color.getHexString()}`;
         }
@@ -510,12 +520,79 @@
 
     /* ============ PIXEL ART PAINTER ============ */
     const PIXEL_COLORS = ['#000000','#ffffff','#ff0000','#ff8800','#ffff00','#00cc00','#008800','#0000ff','#66ccff','#9933ff','#ff66cc','#8b4513','#888888','#444444','#ffcc99','#00ffff'];
+    // BoxGeometry material order: +x right, -x left, +y top, -y bottom, +z front, -z back
+    const PIXEL_FACE_ORDER = ['right', 'left', 'top', 'bottom', 'front', 'back'];
     let pixelSize = 16;
     let pixelPixels = new Array(256).fill(null);
     let pixelColor = '#ff0000';
     let pixelTool = 'brush';
     let pixelPainting = false;
     let pixelEditTarget = null;
+    let pixelFaces = PIXEL_FACE_ORDER.slice();
+
+    function isPixelBox(obj) {
+      return !!obj && !!obj.geometry && obj.geometry.type === 'BoxGeometry';
+    }
+    // Faces saved with the art. Old saves have no faces list: they painted every face.
+    function pixelFacesOf(pa) {
+      if (pa && Array.isArray(pa.faces) && pa.faces.length) {
+        const kept = pa.faces.filter(f => PIXEL_FACE_ORDER.indexOf(f) !== -1);
+        if (kept.length) return kept;
+      }
+      return PIXEL_FACE_ORDER.slice();
+    }
+    // The cube being painted right now, or null (sphere / picture / nothing selected).
+    function facePickerTarget() {
+      const t = pixelEditTarget || selectedObject;
+      return isPixelBox(t) ? t : null;
+    }
+    function renderPixelFaces() {
+      const box = document.getElementById('pixelFaceChecks');
+      if (!box) return;
+      box.innerHTML = '';
+      PIXEL_FACE_ORDER.forEach(f => {
+        const lab = document.createElement('label');
+        lab.style.cssText = 'font-size:12px;color:#ddd;cursor:pointer;text-transform:capitalize;';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = pixelFaces.indexOf(f) !== -1;
+        cb.onchange = () => { setPixelFace(f, cb.checked); };
+        lab.appendChild(cb);
+        lab.appendChild(document.createTextNode(' ' + f));
+        box.appendChild(lab);
+      });
+    }
+    function setPixelFace(face, on) {
+      if (on) {
+        if (pixelFaces.indexOf(face) === -1) pixelFaces.push(face);
+      } else {
+        if (pixelFaces.length <= 1) { renderPixelFaces(); showEnginePopup('Pick at least one face.'); return; }
+        pixelFaces = pixelFaces.filter(f => f !== face);
+      }
+      renderPixelFaces();
+    }
+    function syncPixelFacePicker() {
+      const p = document.getElementById('pixelFacePicker');
+      if (!p) return;
+      const show = !!facePickerTarget();
+      p.style.display = show ? 'block' : 'none';
+      if (show) renderPixelFaces();
+    }
+    function togglePixelFacePicker() {
+      const p = document.getElementById('pixelFacePicker');
+      if (!p || !facePickerTarget()) return;
+      p.style.display = (p.style.display === 'none' || !p.style.display) ? 'block' : 'none';
+      if (p.style.display === 'block') renderPixelFaces();
+    }
+    // Q re-opens the face picker while painting (only while the painter is open).
+    document.addEventListener('keydown', function(e) {
+      if (e.code !== 'KeyQ') return;
+      const ov = document.getElementById('pixel-modal-overlay');
+      if (!ov || !ov.classList.contains('open')) return;
+      const tag = (e.target && e.target.tagName) || '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      togglePixelFacePicker();
+    });
 
     function makePixelTexture(pa) {
       const c = document.createElement('canvas');
@@ -530,7 +607,9 @@
       return t;
     }
     function currentPixelArt() {
-      return { size: pixelSize, pixels: pixelPixels.slice() };
+      const pa = { size: pixelSize, pixels: pixelPixels.slice() };
+      if (facePickerTarget()) pa.faces = pixelFaces.slice();
+      return pa;
     }
     function renderPixelPalette() {
       const pal = document.getElementById('pixelPalette');
@@ -615,9 +694,11 @@
       pixelEditTarget = null;
       pixelSize = 16;
       pixelPixels = new Array(256).fill(null);
+      pixelFaces = PIXEL_FACE_ORDER.slice();
       document.querySelectorAll('.pixel-size').forEach(b => b.classList.toggle('active', parseInt(b.dataset.size) === 16));
       renderPixelPalette();
       drawPixelCanvas();
+      syncPixelFacePicker();
       const cv = document.getElementById('pixelCanvas');
       cv.onpointerdown = (e) => { pixelPainting = true; cv.setPointerCapture(e.pointerId); paintPixelCell(pixelCellFromEvent(e)); };
       cv.onpointermove = (e) => { if (pixelPainting && pixelTool !== 'fill') paintPixelCell(pixelCellFromEvent(e)); };
@@ -631,9 +712,11 @@
       pixelEditTarget = selectedObject;
       pixelSize = pa.size;
       pixelPixels = pa.pixels.slice();
+      pixelFaces = pixelFacesOf(pa);
       document.querySelectorAll('.pixel-size').forEach(b => b.classList.toggle('active', parseInt(b.dataset.size) === pixelSize));
       renderPixelPalette();
       drawPixelCanvas();
+      syncPixelFacePicker();
       const cv = document.getElementById('pixelCanvas');
       cv.onpointerdown = (e) => { pixelPainting = true; cv.setPointerCapture(e.pointerId); paintPixelCell(pixelCellFromEvent(e)); };
       cv.onpointermove = (e) => { if (pixelPainting && pixelTool !== 'fill') paintPixelCell(pixelCellFromEvent(e)); };
@@ -643,22 +726,54 @@
     }
     function closePixelArt() {
       document.getElementById('pixel-modal-overlay').classList.remove('open');
+      const p = document.getElementById('pixelFacePicker');
+      if (p) p.style.display = 'none';
       pixelEditTarget = null;
     }
     function applyPixelArtToObject(obj, pa) {
       if (!obj || !obj.material) return;
       obj.userData.pixelArt = JSON.parse(JSON.stringify(pa));
-      obj.material.map = makePixelTexture(pa);
-      obj.material.transparent = true;
-      obj.material.needsUpdate = true;
+      // Remember the object's plain color so removing the art can put it back.
+      if (!obj.userData.pixelArtBaseColor) {
+        const m0 = Array.isArray(obj.material) ? obj.material[0] : obj.material;
+        if (m0 && m0.color) obj.userData.pixelArtBaseColor = '#' + m0.color.getHexString();
+      }
+      const baseColor = obj.userData.pixelArtBaseColor || '#ffffff';
+      const tex = makePixelTexture(pa);
+      if (isPixelBox(obj)) {
+        // One material per cube face: the same texture on every picked face,
+        // the plain base color on the rest.
+        const faces = pixelFacesOf(pa);
+        obj.material = PIXEL_FACE_ORDER.map(function(faceName) {
+          if (faces.indexOf(faceName) !== -1) {
+            return new THREE.MeshStandardMaterial({ map: tex, transparent: true, roughness: 0.3, color: 0xffffff });
+          }
+          return new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.3 });
+        });
+      } else {
+        // The texture is multiplied by the material color, so a green cube
+        // would turn every painted color green. Painted faces stay white.
+        obj.material.map = tex;
+        obj.material.color.set(0xffffff);
+        obj.material.transparent = true;
+        obj.material.needsUpdate = true;
+      }
     }
     function removePixelArtFromSelected() {
       if (!selectedObject) return;
+      const hadBase = !!selectedObject.userData.pixelArtBaseColor;
+      const baseColor = selectedObject.userData.pixelArtBaseColor || '#ffffff';
       delete selectedObject.userData.pixelArt;
+      delete selectedObject.userData.pixelArtBaseColor;
       if (selectedObject.material) {
-        selectedObject.material.map = null;
-        selectedObject.material.transparent = false;
-        selectedObject.material.needsUpdate = true;
+        if (Array.isArray(selectedObject.material)) {
+          selectedObject.material = new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.3 });
+        } else {
+          selectedObject.material.map = null;
+          if (hadBase) selectedObject.material.color.set(baseColor);
+          selectedObject.material.transparent = false;
+          selectedObject.material.needsUpdate = true;
+        }
       }
       updateInspector();
     }
@@ -829,7 +944,7 @@
         'o.rotation.set(it.rotation[0],it.rotation[1],it.rotation[2]);',
         'o.scale.set(it.scale[0],it.scale[1],it.scale[2]);',
         'o.castShadow=true;o.receiveShadow=true;',
-        'if(it.pixelArt){o.material.map=pixelTex(it.pixelArt);o.material.transparent=true;o.material.needsUpdate=true;}',
+        'if(it.pixelArt){if(it.type==="cube"){var _pf=(it.pixelArt.faces&&it.pixelArt.faces.length)?it.pixelArt.faces:["right","left","top","bottom","front","back"];var _fo=["right","left","top","bottom","front","back"];var _tx=pixelTex(it.pixelArt);o.material=_fo.map(function(fn){return _pf.indexOf(fn)!==-1?new THREE.MeshStandardMaterial({map:_tx,transparent:true,roughness:.7,color:0xffffff}):new THREE.MeshStandardMaterial({color:it.color,roughness:.7});});}else{o.material.map=pixelTex(it.pixelArt);o.material.color.set(0xffffff);o.material.transparent=true;o.material.needsUpdate=true;}}',
         'scene.add(o);regBox(o);o.userData.clickName=it.name;clickTargets.push(o);});',
         'var R=0.45;',
         'var pos=new THREE.Vector3(0,0,6),vel=new THREE.Vector3(),yaw=0,pitch=0,grounded=false;',
@@ -1051,8 +1166,11 @@
       }
 
       let currentColor = '#007acc';
-      if (selectedObject.material) {
-        currentColor = `#${selectedObject.material.color.getHexString()}`;
+      if (selectedObject.userData.pixelArtBaseColor) {
+        currentColor = selectedObject.userData.pixelArtBaseColor;
+      } else if (selectedObject.material) {
+        const m0 = Array.isArray(selectedObject.material) ? selectedObject.material[0] : selectedObject.material;
+        if (m0 && m0.color) currentColor = `#${m0.color.getHexString()}`;
       } else if (selectedObject.children && selectedObject.children[0] && selectedObject.children[0].material) {
         currentColor = `#${selectedObject.children[0].material.color.getHexString()}`;
       }
@@ -1151,8 +1269,17 @@
 
     function updateSelectedColor(colorHex) {
       if (!selectedObject) return;
-      if (selectedObject.material) {
-        selectedObject.material.color.set(colorHex);
+      if (Array.isArray(selectedObject.material)) {
+        // Painted cube: recolor the plain faces only, so the art stays true.
+        selectedObject.userData.pixelArtBaseColor = colorHex;
+        selectedObject.material.forEach(fm => { if (!fm.map) fm.color.set(colorHex); });
+      } else if (selectedObject.material) {
+        if (selectedObject.userData.pixelArt && selectedObject.material.map) {
+          // Painted object: keep the art true, remember the color for later.
+          selectedObject.userData.pixelArtBaseColor = colorHex;
+        } else {
+          selectedObject.material.color.set(colorHex);
+        }
       } else if (selectedObject.children && selectedObject.children[0] && selectedObject.children[0].material) {
         selectedObject.children[0].material.color.set(colorHex);
       }
