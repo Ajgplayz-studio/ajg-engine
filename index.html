@@ -77,7 +77,7 @@
       top: 0; left: 0; width: 100%; height: 100%;
       background: rgba(0, 0, 0, 0.65);
       backdrop-filter: blur(3px);
-      z-index: 9999;
+      z-index: 10002;
       align-items: center;
       justify-content: center;
     }
@@ -533,13 +533,31 @@
     function isPixelBox(obj) {
       return !!obj && !!obj.geometry && obj.geometry.type === 'BoxGeometry';
     }
-    // Faces saved with the art. Old saves have no faces list: they painted every face.
-    function pixelFacesOf(pa) {
+    // Faces this art object says to paint now (its selection list).
+    // Old saves have no faces list: they painted every face.
+    function pixelPickedFaces(pa) {
       if (pa && Array.isArray(pa.faces) && pa.faces.length) {
         const kept = pa.faces.filter(f => PIXEL_FACE_ORDER.indexOf(f) !== -1);
         if (kept.length) return kept;
       }
       return PIXEL_FACE_ORDER.slice();
+    }
+    // Faces that actually have a picture. New saves store one picture per
+    // face (pa.faceArt); old saves share one picture across their faces list.
+    function pixelFacesOf(pa) {
+      if (pa && pa.faceArt) {
+        const withArt = PIXEL_FACE_ORDER.filter(f => pa.faceArt[f] && Array.isArray(pa.faceArt[f].pixels));
+        if (withArt.length) return withArt;
+      }
+      return pixelPickedFaces(pa);
+    }
+    // The picture a face shows: its own stored picture, or the shared picture
+    // when the face is painted in an old single-picture save. Null = plain.
+    function pixelFacePicture(pa, face) {
+      if (!pa) return null;
+      if (pa.faceArt && pa.faceArt[face] && Array.isArray(pa.faceArt[face].pixels)) return pa.faceArt[face];
+      if (pixelPickedFaces(pa).indexOf(face) !== -1) return { size: pa.size, pixels: pa.pixels };
+      return null;
     }
     // The cube being painted right now, or null (sphere / picture / nothing selected).
     function facePickerTarget() {
@@ -594,17 +612,20 @@
       togglePixelFacePicker();
     });
 
-    function makePixelTexture(pa) {
+    function makePixelTextureFrom(size, pixels) {
       const c = document.createElement('canvas');
-      c.width = pa.size; c.height = pa.size;
+      c.width = size; c.height = size;
       const g = c.getContext('2d');
-      for (let y = 0; y < pa.size; y++) for (let x = 0; x < pa.size; x++) {
-        const col = pa.pixels[y * pa.size + x];
+      for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+        const col = pixels[y * size + x];
         if (col) { g.fillStyle = col; g.fillRect(x, y, 1, 1); }
       }
       const t = new THREE.CanvasTexture(c);
       t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter; t.generateMipmaps = false;
       return t;
+    }
+    function makePixelTexture(pa) {
+      return makePixelTextureFrom(pa.size, pa.pixels);
     }
     function currentPixelArt() {
       const pa = { size: pixelSize, pixels: pixelPixels.slice() };
@@ -729,9 +750,39 @@
       const p = document.getElementById('pixelFacePicker');
       if (p) p.style.display = 'none';
       pixelEditTarget = null;
+      // A notice shown while painting (e.g. "Pick at least one face.") must not
+      // survive the painter closing and pop up later, after the user is done.
+      closeEnginePopup();
     }
     function applyPixelArtToObject(obj, pa) {
       if (!obj || !obj.material) return;
+      const prev = obj.userData.pixelArt;
+      // One picture per face. Faces picked now get the new picture; faces not
+      // picked keep the picture they already had (if any) instead of going plain.
+      const faceArt = {};
+      // (a) A save being loaded already stores a picture per face: restore those.
+      if (pa.faceArt) {
+        PIXEL_FACE_ORDER.forEach(function(f) {
+          const pic = pa.faceArt[f];
+          if (pic && Array.isArray(pic.pixels)) faceArt[f] = { size: pic.size, pixels: pic.pixels.slice() };
+        });
+      }
+      // (b) Faces not being painted now keep the picture they already had on this object.
+      if (prev) {
+        pixelFacesOf(prev).forEach(function(f) {
+          if (faceArt[f]) return;
+          const pic = pixelFacePicture(prev, f);
+          if (pic) faceArt[f] = { size: pic.size, pixels: pic.pixels.slice() };
+        });
+      }
+      // (c) Faces picked now get the new picture (fresh painting only — a save
+      // being loaded already gave its faces their own pictures in (a)).
+      if (!pa.faceArt) {
+        pixelPickedFaces(pa).forEach(function(f) { faceArt[f] = { size: pa.size, pixels: pa.pixels.slice() }; });
+      }
+      pa = JSON.parse(JSON.stringify(pa));
+      pa.faceArt = faceArt;
+      pa.faces = PIXEL_FACE_ORDER.filter(function(f) { return !!faceArt[f]; });
       obj.userData.pixelArt = JSON.parse(JSON.stringify(pa));
       // Remember the object's plain color so removing the art can put it back.
       if (!obj.userData.pixelArtBaseColor) {
@@ -739,20 +790,21 @@
         if (m0 && m0.color) obj.userData.pixelArtBaseColor = '#' + m0.color.getHexString();
       }
       const baseColor = obj.userData.pixelArtBaseColor || '#ffffff';
-      const tex = makePixelTexture(pa);
       if (isPixelBox(obj)) {
-        // One material per cube face: the same texture on every picked face,
-        // the plain base color on the rest.
-        const faces = pixelFacesOf(pa);
+        // One material per cube face: each painted face shows its own picture
+        // (faces sharing the same picture share one texture), the rest stay plain.
+        const texByKey = {};
         obj.material = PIXEL_FACE_ORDER.map(function(faceName) {
-          if (faces.indexOf(faceName) !== -1) {
-            return new THREE.MeshStandardMaterial({ map: tex, transparent: true, roughness: 0.3, color: 0xffffff });
-          }
-          return new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.3 });
+          const pic = faceArt[faceName];
+          if (!pic) return new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.3 });
+          const key = pic.size + ':' + pic.pixels.join(',');
+          if (!texByKey[key]) texByKey[key] = makePixelTextureFrom(pic.size, pic.pixels);
+          return new THREE.MeshStandardMaterial({ map: texByKey[key], transparent: true, roughness: 0.3, color: 0xffffff });
         });
       } else {
         // The texture is multiplied by the material color, so a green cube
         // would turn every painted color green. Painted faces stay white.
+        const tex = makePixelTexture(pa);
         obj.material.map = tex;
         obj.material.color.set(0xffffff);
         obj.material.transparent = true;
@@ -944,7 +996,7 @@
         'o.rotation.set(it.rotation[0],it.rotation[1],it.rotation[2]);',
         'o.scale.set(it.scale[0],it.scale[1],it.scale[2]);',
         'o.castShadow=true;o.receiveShadow=true;',
-        'if(it.pixelArt){if(it.type==="cube"){var _pf=(it.pixelArt.faces&&it.pixelArt.faces.length)?it.pixelArt.faces:["right","left","top","bottom","front","back"];var _fo=["right","left","top","bottom","front","back"];var _tx=pixelTex(it.pixelArt);o.material=_fo.map(function(fn){return _pf.indexOf(fn)!==-1?new THREE.MeshStandardMaterial({map:_tx,transparent:true,roughness:.7,color:0xffffff}):new THREE.MeshStandardMaterial({color:it.color,roughness:.7});});}else{o.material.map=pixelTex(it.pixelArt);o.material.color.set(0xffffff);o.material.transparent=true;o.material.needsUpdate=true;}}',
+        'if(it.pixelArt){if(it.type==="cube"){var _fa=it.pixelArt.faceArt||null;var _pf=_fa?["right","left","top","bottom","front","back"].filter(function(fn){return _fa[fn];}):((it.pixelArt.faces&&it.pixelArt.faces.length)?it.pixelArt.faces:["right","left","top","bottom","front","back"]);var _fo=["right","left","top","bottom","front","back"];var _tx=pixelTex(it.pixelArt);o.material=_fo.map(function(fn){var _ft=(_fa&&_fa[fn])?pixelTex(_fa[fn]):_tx;return _pf.indexOf(fn)!==-1?new THREE.MeshStandardMaterial({map:_ft,transparent:true,roughness:.7,color:0xffffff}):new THREE.MeshStandardMaterial({color:it.color,roughness:.7});});}else{o.material.map=pixelTex(it.pixelArt);o.material.color.set(0xffffff);o.material.transparent=true;o.material.needsUpdate=true;}}',
         'scene.add(o);regBox(o);o.userData.clickName=it.name;clickTargets.push(o);});',
         'var R=0.45;',
         'var pos=new THREE.Vector3(0,0,6),vel=new THREE.Vector3(),yaw=0,pitch=0,grounded=false;',
