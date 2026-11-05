@@ -129,7 +129,7 @@
     <button class="btn" onclick="addPrimitive('sphere')">+ Sphere</button>
     <button class="btn" onclick="addPrimitive('spawnpoint')">📍 + Spawn Point</button>
     <button class="btn" onclick="addPrimitive('watch')">⌚ + Watch</button>
-    <button class="btn" onclick="openPixelArt()">🎨 Pixel Art</button>
+    <button class="btn" onclick="openPixelArt()">🎨 Art</button>
   </div>
 
   <div id="editor">
@@ -170,19 +170,24 @@
 
   <div id="pixel-modal-overlay">
     <div class="pixel-modal-card">
-      <div style="display:flex;align-items:center;gap:10px;font-weight:bold;color:#007acc;font-size:15px;">🎨 Pixel Art Painter <span style="flex:1"></span><button class="btn" onclick="closePixelArt()">✕ Close</button></div>
-      <div style="font-size:11px;color:#888;margin-top:4px;">Paint pixel by pixel, then put it on an object or add it as a picture in your world.</div>
+      <div style="display:flex;align-items:center;gap:10px;font-weight:bold;color:#007acc;font-size:15px;">🎨 Art <span style="flex:1"></span><button class="btn" onclick="closePixelArt()">✕ Close</button></div>
+      <div style="font-size:11px;color:#888;margin-top:4px;">Paint pixel art or upload an image, then put it on an object or add it as a picture in your world.</div>
+      <div id="artChoice" style="display:flex;gap:10px;justify-content:center;margin-top:16px;flex-wrap:wrap;">
+        <button class="btn btn-action" style="padding:14px 18px;font-size:14px;" onclick="chooseArtMode('upload')">🖼️ Upload an image</button>
+        <button class="btn btn-action" style="padding:14px 18px;font-size:14px;" onclick="chooseArtMode('pixel')">🎨 Pixel art</button>
+      </div>
+      <div id="pixelFacePicker" style="display:none;margin-top:10px;border:1px solid #3c3c3c;border-radius:8px;padding:10px;">
+        <div style="font-size:12px;font-weight:bold;color:#007acc;">Which faces do you want to paint?</div>
+        <div style="font-size:11px;color:#888;margin:2px 0 8px;">Pick one or more — the same picture goes on every face you pick. Press Q to show or hide this.</div>
+        <div id="pixelFaceChecks" style="display:flex;gap:14px;justify-content:center;flex-wrap:wrap;"></div>
+      </div>
+      <div id="artPainter" style="display:none;">
       <div style="display:flex;gap:6px;align-items:center;justify-content:center;margin-top:10px;flex-wrap:wrap;">
         <span style="font-size:11px;color:#aaa;">Size:</span>
         <button class="btn pixel-size" data-size="8" onclick="setPixelSize(8)">8×8</button>
         <button class="btn pixel-size active" data-size="16" onclick="setPixelSize(16)">16×16</button>
         <button class="btn pixel-size" data-size="32" onclick="setPixelSize(32)">32×32</button>
         <span style="font-size:11px;color:#666;">(changing size starts a new picture)</span>
-      </div>
-      <div id="pixelFacePicker" style="display:none;margin-top:10px;border:1px solid #3c3c3c;border-radius:8px;padding:10px;">
-        <div style="font-size:12px;font-weight:bold;color:#007acc;">Which faces do you want to paint?</div>
-        <div style="font-size:11px;color:#888;margin:2px 0 8px;">Pick one or more — the same picture goes on every face you pick. Press Q to show or hide this.</div>
-        <div id="pixelFaceChecks" style="display:flex;gap:14px;justify-content:center;flex-wrap:wrap;"></div>
       </div>
       <canvas id="pixelCanvas" width="320" height="320"></canvas>
       <div style="display:flex;gap:6px;justify-content:center;flex-wrap:wrap;margin-bottom:8px;">
@@ -196,7 +201,15 @@
         <label style="font-size:11px;color:#aaa;">Custom color</label>
         <input type="color" id="pixelColorCustom" value="#ff0000" oninput="setPixelColor(this.value)">
       </div>
-      <div style="display:flex;gap:8px;justify-content:center;margin-top:14px;flex-wrap:wrap;">
+      </div>
+      <div id="artUpload" style="display:none;margin-top:14px;text-align:center;">
+        <input type="file" id="artImageFile" accept="image/*" style="display:none;" onchange="onArtImageFile(event)">
+        <button class="btn btn-action" onclick="document.getElementById('artImageFile').click()">📁 Choose an image…</button>
+        <div style="font-size:11px;color:#888;margin-top:6px;">PNG or JPG — big images are shrunk to 512px so your save stays small.</div>
+        <img id="artUploadPreview" style="display:none;max-width:100%;max-height:260px;margin:12px auto 0;border:2px solid #007acc;border-radius:8px;">
+        <div style="margin-top:14px;"><button class="btn btn-action" id="artUploadApply" style="display:none;" onclick="applyUploadedImageToSelected()">✔ Apply image to selected object</button></div>
+      </div>
+      <div id="artPixelApply" style="display:none;gap:8px;justify-content:center;margin-top:14px;flex-wrap:wrap;">
         <button class="btn btn-action" onclick="applyPixelArtToSelected()">✔ Apply to selected object</button>
         <button class="btn btn-action" onclick="addPixelArtPicture()">🖼️ Add as a picture</button>
       </div>
@@ -529,6 +542,53 @@
     let pixelPainting = false;
     let pixelEditTarget = null;
     let pixelFaces = PIXEL_FACE_ORDER.slice();
+    // "Art" mode: 'pixel' (paint in the editor) or 'upload' (use an image file).
+    let artMode = null;
+    let uploadedImageDataUrl = null;
+
+    // A "picture" is either pixel art {size, pixels} or an uploaded image
+    // {image: dataURL}. Both kinds live in the same per-face slots (faceArt)
+    // and the same save field (userData.pixelArt), so old pixel saves load
+    // exactly as before and images ride along in .ajg files as base64.
+    function isArtPicture(pic) {
+      return !!pic && (Array.isArray(pic.pixels) || typeof pic.image === 'string');
+    }
+    function copyArtPicture(pic) {
+      if (!pic) return null;
+      if (typeof pic.image === 'string') return { image: pic.image };
+      if (Array.isArray(pic.pixels)) return { size: pic.size, pixels: pic.pixels.slice() };
+      return null;
+    }
+    function firstImageOf(pa) {
+      if (pa && typeof pa.image === 'string') return pa.image;
+      if (pa && pa.faceArt) {
+        for (let i = 0; i < PIXEL_FACE_ORDER.length; i++) {
+          const pic = pa.faceArt[PIXEL_FACE_ORDER[i]];
+          if (pic && typeof pic.image === 'string') return pic.image;
+        }
+      }
+      return null;
+    }
+    // Image textures draw the picture onto a canvas once it loads, so the
+    // texture stays valid even though the image arrives asynchronously.
+    function makeImageTexture(dataUrl) {
+      const img = new Image();
+      const c = document.createElement('canvas');
+      c.width = 1; c.height = 1;
+      const t = new THREE.CanvasTexture(c);
+      t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter; t.generateMipmaps = false;
+      img.onload = function() {
+        c.width = img.naturalWidth; c.height = img.naturalHeight;
+        c.getContext('2d').drawImage(img, 0, 0);
+        t.needsUpdate = true;
+      };
+      img.src = dataUrl;
+      return t;
+    }
+    function makePictureTexture(pic) {
+      if (pic && typeof pic.image === 'string') return makeImageTexture(pic.image);
+      return makePixelTextureFrom(pic.size, pic.pixels);
+    }
 
     function isPixelBox(obj) {
       return !!obj && !!obj.geometry && obj.geometry.type === 'BoxGeometry';
@@ -546,7 +606,7 @@
     // face (pa.faceArt); old saves share one picture across their faces list.
     function pixelFacesOf(pa) {
       if (pa && pa.faceArt) {
-        const withArt = PIXEL_FACE_ORDER.filter(f => pa.faceArt[f] && Array.isArray(pa.faceArt[f].pixels));
+        const withArt = PIXEL_FACE_ORDER.filter(f => pa.faceArt[f] && isArtPicture(pa.faceArt[f]));
         if (withArt.length) return withArt;
       }
       return pixelPickedFaces(pa);
@@ -555,7 +615,7 @@
     // when the face is painted in an old single-picture save. Null = plain.
     function pixelFacePicture(pa, face) {
       if (!pa) return null;
-      if (pa.faceArt && pa.faceArt[face] && Array.isArray(pa.faceArt[face].pixels)) return pa.faceArt[face];
+      if (pa.faceArt && pa.faceArt[face] && isArtPicture(pa.faceArt[face])) return pa.faceArt[face];
       if (pixelPickedFaces(pa).indexOf(face) !== -1) return { size: pa.size, pixels: pa.pixels };
       return null;
     }
@@ -625,6 +685,7 @@
       return t;
     }
     function makePixelTexture(pa) {
+      if (pa && typeof pa.image === 'string') return makeImageTexture(pa.image);
       return makePixelTextureFrom(pa.size, pa.pixels);
     }
     function currentPixelArt() {
@@ -711,38 +772,78 @@
         stack.push([cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]);
       }
     }
-    function openPixelArt() {
-      pixelEditTarget = null;
-      pixelSize = 16;
-      pixelPixels = new Array(256).fill(null);
-      pixelFaces = PIXEL_FACE_ORDER.slice();
-      document.querySelectorAll('.pixel-size').forEach(b => b.classList.toggle('active', parseInt(b.dataset.size) === 16));
-      renderPixelPalette();
-      drawPixelCanvas();
-      syncPixelFacePicker();
+    // Which part of the Art modal is showing: null = the Upload / Pixel choice.
+    function showArtView(mode) {
+      artMode = mode;
+      const choice = document.getElementById('artChoice');
+      const painter = document.getElementById('artPainter');
+      const upload = document.getElementById('artUpload');
+      const applyRow = document.getElementById('artPixelApply');
+      if (choice) choice.style.display = mode ? 'none' : 'flex';
+      if (painter) painter.style.display = mode === 'pixel' ? 'block' : 'none';
+      if (upload) upload.style.display = mode === 'upload' ? 'block' : 'none';
+      if (applyRow) applyRow.style.display = mode === 'pixel' ? 'flex' : 'none';
+      if (mode !== 'pixel') { const p = document.getElementById('pixelFacePicker'); if (p) p.style.display = 'none'; }
+    }
+    function setupPixelCanvasHandlers() {
       const cv = document.getElementById('pixelCanvas');
       cv.onpointerdown = (e) => { pixelPainting = true; cv.setPointerCapture(e.pointerId); paintPixelCell(pixelCellFromEvent(e)); };
       cv.onpointermove = (e) => { if (pixelPainting && pixelTool !== 'fill') paintPixelCell(pixelCellFromEvent(e)); };
       cv.onpointerup = () => { pixelPainting = false; };
       cv.onpointerleave = () => { pixelPainting = false; };
+    }
+    function chooseArtMode(mode) {
+      if (mode === 'pixel') {
+        pixelSize = 16;
+        pixelPixels = new Array(256).fill(null);
+        pixelFaces = PIXEL_FACE_ORDER.slice();
+        document.querySelectorAll('.pixel-size').forEach(b => b.classList.toggle('active', parseInt(b.dataset.size) === 16));
+        renderPixelPalette();
+        drawPixelCanvas();
+        setupPixelCanvasHandlers();
+        syncPixelFacePicker();
+      } else {
+        uploadedImageDataUrl = null;
+        const prev = document.getElementById('artUploadPreview');
+        if (prev) { prev.style.display = 'none'; prev.src = ''; }
+        const ap = document.getElementById('artUploadApply');
+        if (ap) ap.style.display = 'none';
+      }
+      showArtView(mode);
+    }
+    function openPixelArt() {
+      pixelEditTarget = null;
+      pixelFaces = PIXEL_FACE_ORDER.slice();
+      uploadedImageDataUrl = null;
+      showArtView(null);
       document.getElementById('pixel-modal-overlay').classList.add('open');
     }
     function editPixelArtForSelected() {
       if (!selectedObject || !selectedObject.userData.pixelArt) return;
       const pa = selectedObject.userData.pixelArt;
       pixelEditTarget = selectedObject;
-      pixelSize = pa.size;
-      pixelPixels = pa.pixels.slice();
-      pixelFaces = pixelFacesOf(pa);
-      document.querySelectorAll('.pixel-size').forEach(b => b.classList.toggle('active', parseInt(b.dataset.size) === pixelSize));
-      renderPixelPalette();
-      drawPixelCanvas();
-      syncPixelFacePicker();
-      const cv = document.getElementById('pixelCanvas');
-      cv.onpointerdown = (e) => { pixelPainting = true; cv.setPointerCapture(e.pointerId); paintPixelCell(pixelCellFromEvent(e)); };
-      cv.onpointermove = (e) => { if (pixelPainting && pixelTool !== 'fill') paintPixelCell(pixelCellFromEvent(e)); };
-      cv.onpointerup = () => { pixelPainting = false; };
-      cv.onpointerleave = () => { pixelPainting = false; };
+      if (firstImageOf(pa)) {
+        // Art made from an uploaded image: reopen in upload mode with the
+        // same image as the preview, faces set to the ones showing it.
+        uploadedImageDataUrl = firstImageOf(pa);
+        pixelFaces = pixelFacesOf(pa);
+        showArtView('upload');
+        const prev = document.getElementById('artUploadPreview');
+        if (prev) { prev.src = uploadedImageDataUrl; prev.style.display = 'block'; }
+        const ap = document.getElementById('artUploadApply');
+        if (ap) ap.style.display = '';
+        syncPixelFacePicker();
+      } else {
+        pixelSize = pa.size;
+        pixelPixels = pa.pixels.slice();
+        pixelFaces = pixelFacesOf(pa);
+        document.querySelectorAll('.pixel-size').forEach(b => b.classList.toggle('active', parseInt(b.dataset.size) === pixelSize));
+        renderPixelPalette();
+        drawPixelCanvas();
+        setupPixelCanvasHandlers();
+        showArtView('pixel');
+        syncPixelFacePicker();
+      }
       document.getElementById('pixel-modal-overlay').classList.add('open');
     }
     function closePixelArt() {
@@ -750,9 +851,57 @@
       const p = document.getElementById('pixelFacePicker');
       if (p) p.style.display = 'none';
       pixelEditTarget = null;
+      artMode = null;
+      uploadedImageDataUrl = null;
+      showArtView(null);
       // A notice shown while painting (e.g. "Pick at least one face.") must not
       // survive the painter closing and pop up later, after the user is done.
       closeEnginePopup();
+    }
+    function onArtImageFile(event) {
+      const file = event.target.files[0];
+      event.target.value = '';
+      if (!file) return;
+      if (!file.type || file.type.indexOf('image/') !== 0) { showEnginePopup('Pick an image file.'); return; }
+      const reader = new FileReader();
+      reader.onload = function(e) { downscaleArtImage(e.target.result); };
+      reader.readAsDataURL(file);
+    }
+    // Shrink big images to 512px on the longest side before storing, so an
+    // uploaded image stays small inside the .ajg save.
+    function downscaleArtImage(dataUrl) {
+      const img = new Image();
+      img.onload = function() {
+        const max = 512;
+        let w = img.naturalWidth, h = img.naturalHeight;
+        if (w > max || h > max) {
+          const s = Math.min(max / w, max / h);
+          w = Math.max(1, Math.round(w * s)); h = Math.max(1, Math.round(h * s));
+        }
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        c.getContext('2d').drawImage(img, 0, 0, w, h);
+        uploadedImageDataUrl = c.toDataURL('image/png');
+        const prev = document.getElementById('artUploadPreview');
+        if (prev) { prev.src = uploadedImageDataUrl; prev.style.display = 'block'; }
+        const ap = document.getElementById('artUploadApply');
+        if (ap) ap.style.display = '';
+        pixelFaces = PIXEL_FACE_ORDER.slice();
+        syncPixelFacePicker();
+      };
+      img.onerror = function() { showEnginePopup('Could not read that image.'); };
+      img.src = dataUrl;
+    }
+    function applyUploadedImageToSelected() {
+      const target = pixelEditTarget || selectedObject;
+      if (!target) { showEnginePopup('Select an object first, then add art to it.'); return; }
+      if (!uploadedImageDataUrl) { showEnginePopup('Choose an image first.'); return; }
+      const pa = { image: uploadedImageDataUrl };
+      if (facePickerTarget()) pa.faces = pixelFaces.slice();
+      applyPixelArtToObject(target, pa);
+      closePixelArt();
+      selectObject(target);
+      showEnginePopup('Image applied to ' + target.name + '!');
     }
     function applyPixelArtToObject(obj, pa) {
       if (!obj || !obj.material) return;
@@ -764,7 +913,7 @@
       if (pa.faceArt) {
         PIXEL_FACE_ORDER.forEach(function(f) {
           const pic = pa.faceArt[f];
-          if (pic && Array.isArray(pic.pixels)) faceArt[f] = { size: pic.size, pixels: pic.pixels.slice() };
+          if (pic && isArtPicture(pic)) { const cp = copyArtPicture(pic); if (cp) faceArt[f] = cp; }
         });
       }
       // (b) Faces not being painted now keep the picture they already had on this object.
@@ -772,13 +921,13 @@
         pixelFacesOf(prev).forEach(function(f) {
           if (faceArt[f]) return;
           const pic = pixelFacePicture(prev, f);
-          if (pic) faceArt[f] = { size: pic.size, pixels: pic.pixels.slice() };
+          if (pic) { const cp = copyArtPicture(pic); if (cp) faceArt[f] = cp; }
         });
       }
       // (c) Faces picked now get the new picture (fresh painting only — a save
       // being loaded already gave its faces their own pictures in (a)).
       if (!pa.faceArt) {
-        pixelPickedFaces(pa).forEach(function(f) { faceArt[f] = { size: pa.size, pixels: pa.pixels.slice() }; });
+        pixelPickedFaces(pa).forEach(function(f) { faceArt[f] = (typeof pa.image === 'string') ? { image: pa.image } : { size: pa.size, pixels: pa.pixels.slice() }; });
       }
       pa = JSON.parse(JSON.stringify(pa));
       pa.faceArt = faceArt;
@@ -797,8 +946,8 @@
         obj.material = PIXEL_FACE_ORDER.map(function(faceName) {
           const pic = faceArt[faceName];
           if (!pic) return new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.3 });
-          const key = pic.size + ':' + pic.pixels.join(',');
-          if (!texByKey[key]) texByKey[key] = makePixelTextureFrom(pic.size, pic.pixels);
+          const key = (typeof pic.image === 'string') ? ('img:' + pic.image.length + ':' + pic.image.slice(0, 64)) : (pic.size + ':' + pic.pixels.join(','));
+          if (!texByKey[key]) texByKey[key] = makePictureTexture(pic);
           return new THREE.MeshStandardMaterial({ map: texByKey[key], transparent: true, roughness: 0.3, color: 0xffffff });
         });
       } else {
@@ -835,7 +984,7 @@
       applyPixelArtToObject(target, currentPixelArt());
       closePixelArt();
       selectObject(target);
-      showEnginePopup('Pixel art applied to ' + target.name + '!');
+      showEnginePopup('Art applied to ' + target.name + '!');
     }
     function addPixelArtPicture() {
       const pa = currentPixelArt();
@@ -973,7 +1122,7 @@
         'scene.add(sun);',
         ...(showGrid ? ['scene.add(new THREE.GridHelper(60,60,0xffffff,0xbbbbbb));'] : []),
         'var solids=[];var clickTargets=[];',
-        'function pixelTex(pa){var c=document.createElement("canvas");c.width=pa.size;c.height=pa.size;var g=c.getContext("2d");for(var y=0;y<pa.size;y++)for(var x=0;x<pa.size;x++){var col=pa.pixels[y*pa.size+x];if(col){g.fillStyle=col;g.fillRect(x,y,1,1);}}var t=new THREE.CanvasTexture(c);t.magFilter=THREE.NearestFilter;t.minFilter=THREE.NearestFilter;t.generateMipmaps=false;return t;}',
+        'function pixelTex(pa){var c=document.createElement("canvas");var g=c.getContext("2d");var t=new THREE.CanvasTexture(c);t.magFilter=THREE.NearestFilter;t.minFilter=THREE.NearestFilter;t.generateMipmaps=false;if(pa.image){var im=new Image();im.onload=function(){c.width=im.naturalWidth;c.height=im.naturalHeight;g.drawImage(im,0,0);t.needsUpdate=true;};im.src=pa.image;c.width=1;c.height=1;}else{c.width=pa.size;c.height=pa.size;for(var y=0;y<pa.size;y++)for(var x=0;x<pa.size;x++){var col=pa.pixels[y*pa.size+x];if(col){g.fillStyle=col;g.fillRect(x,y,1,1);}}}return t;}',
         'var spawnPt=null;',
         'function regBox(o){var b=new THREE.Box3().setFromObject(o);solids.push({x0:b.min.x,x1:b.max.x,y0:b.min.y,y1:b.max.y,z0:b.min.z,z1:b.max.z});}',
         'SCENE.forEach(function(it){',
@@ -1238,8 +1387,8 @@
       const canPaint = ['cube', 'sphere', 'pixelart'].indexOf(selectedObject.userData.primitiveType) !== -1;
       const hasPixel = !!(selectedObject.userData && selectedObject.userData.pixelArt);
       const pixelSection = canPaint ? `
-        <div class="section-header">🎨 Pixel Art</div>
-        ${hasPixel ? '<div style="font-size:11px;color:#888;margin-bottom:6px;">This object has pixel art on it.</div><button class="btn btn-action" style="margin-right:6px;" onclick="editPixelArtForSelected()">✏️ Edit pixel art</button><button class="btn btn-danger" onclick="removePixelArtFromSelected()">Remove</button>' : '<div style="font-size:11px;color:#888;margin-bottom:6px;">No pixel art on this object yet.</div><button class="btn btn-action" onclick="openPixelArt()">🎨 Paint pixel art</button>'}
+        <div class="section-header">🎨 Art</div>
+        ${hasPixel ? '<div style="font-size:11px;color:#888;margin-bottom:6px;">This object has art on it.</div><button class="btn btn-action" style="margin-right:6px;" onclick="editPixelArtForSelected()">✏️ Edit art</button><button class="btn btn-danger" onclick="removePixelArtFromSelected()">Remove</button>' : '<div style="font-size:11px;color:#888;margin-bottom:6px;">No art on this object yet.</div><button class="btn btn-action" onclick="openPixelArt()">🎨 Make art</button>'}
       ` : '';
       const wd = selectedObject.userData.watchData || { title: 'My Watch', buttons: [] };
       const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
