@@ -8,7 +8,7 @@
     location.replace('https://ajg-engine.foxcorpgames.workers.dev/' + location.search + location.hash);
   }
   </script>
-  <title>AJG ENGINE v2.3</title>
+  <title>AJG ENGINE v2.4</title>
   <!-- Three.js, OrbitControls, TransformControls, GLTFLoader -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
@@ -53,6 +53,15 @@
     #codeEditor { flex:1; background:#1e1e1e; color:#d4d4d4; border:none; padding:14px; font-family:Consolas,'Courier New',monospace; font-size:13px; line-height:1.5; resize:none; outline:none; }
     .code-foot { padding:8px 16px; border-top:1px solid #3c3c3c; font-size:11px; color:#888; }
     
+    /* pixel art painter modal */
+    #pixel-modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:10001; align-items:center; justify-content:center; }
+    #pixel-modal-overlay.open { display:flex; }
+    .pixel-modal-card { background:#252526; border:1px solid #007acc; border-radius:10px; width:min(560px,94vw); max-height:92vh; overflow-y:auto; padding:16px; box-shadow:0 20px 60px rgba(0,0,0,.8); }
+    #pixelCanvas { image-rendering:pixelated; background:#fff; border:2px solid #007acc; cursor:crosshair; touch-action:none; display:block; margin:10px auto; }
+    .pal-swatch { width:26px; height:26px; border:2px solid #555; border-radius:4px; cursor:pointer; padding:0; }
+    .pal-swatch.sel { border-color:#fff; outline:2px solid #007acc; }
+    .pixel-tool.active { background:#007acc; border-color:#007acc; color:#fff; }
+
     .item { padding: 6px 8px; cursor: pointer; border-radius: 3px; font-size: 13px; margin-top: 2px; }
     .item.selected { background: #094771; color: #fff; border-left: 3px solid #007acc; }
     
@@ -91,7 +100,7 @@
 <body>
 
   <div id="toolbar">
-    <div class="brand-title">⚡ AJG ENGINE <span class="brand-badge">v2.3</span></div>
+    <div class="brand-title">⚡ AJG ENGINE <span class="brand-badge">v2.4</span></div>
     <div style="height:16px; width:1px; background:#444;"></div>
     
     <button class="btn btn-action" onclick="exportSceneFile()">⬇ Export .ajg</button>
@@ -120,6 +129,7 @@
     <button class="btn" onclick="addPrimitive('sphere')">+ Sphere</button>
     <button class="btn" onclick="addPrimitive('spawnpoint')">📍 + Spawn Point</button>
     <button class="btn" onclick="addPrimitive('watch')">⌚ + Watch</button>
+    <button class="btn" onclick="openPixelArt()">🎨 Pixel Art</button>
   </div>
 
   <div id="editor">
@@ -155,6 +165,36 @@
         <textarea id="codeEditor" spellcheck="false" oninput="gameCode=this.value" placeholder="// Type JavaScript here, or click the blocks on the left"></textarea>
       </div>
       <div class="code-foot">Runs in Preview &amp; downloads · onStart · onUpdate(dt) · key("KeyW") · getObject(name) · getSteps() · onClick(name,fn) · moveObject(name,x,y,z) · setObjectPos(name,x,y,z) · after(sec,fn) · repeat(n,fn) · say(text)</div>
+    </div>
+  </div>
+
+  <div id="pixel-modal-overlay">
+    <div class="pixel-modal-card">
+      <div style="display:flex;align-items:center;gap:10px;font-weight:bold;color:#007acc;font-size:15px;">🎨 Pixel Art Painter <span style="flex:1"></span><button class="btn" onclick="closePixelArt()">✕ Close</button></div>
+      <div style="font-size:11px;color:#888;margin-top:4px;">Paint pixel by pixel, then put it on an object or add it as a picture in your world.</div>
+      <div style="display:flex;gap:6px;align-items:center;justify-content:center;margin-top:10px;flex-wrap:wrap;">
+        <span style="font-size:11px;color:#aaa;">Size:</span>
+        <button class="btn pixel-size" data-size="8" onclick="setPixelSize(8)">8×8</button>
+        <button class="btn pixel-size active" data-size="16" onclick="setPixelSize(16)">16×16</button>
+        <button class="btn pixel-size" data-size="32" onclick="setPixelSize(32)">32×32</button>
+        <span style="font-size:11px;color:#666;">(changing size starts a new picture)</span>
+      </div>
+      <canvas id="pixelCanvas" width="320" height="320"></canvas>
+      <div style="display:flex;gap:6px;justify-content:center;flex-wrap:wrap;margin-bottom:8px;">
+        <button class="btn pixel-tool active" id="toolBrush" onclick="setPixelTool('brush')">🖌️ Brush</button>
+        <button class="btn pixel-tool" id="toolEraser" onclick="setPixelTool('eraser')">🧽 Eraser</button>
+        <button class="btn pixel-tool" id="toolFill" onclick="setPixelTool('fill')">🪣 Fill</button>
+        <button class="btn" onclick="clearPixelArt()">🗑️ Clear</button>
+      </div>
+      <div id="pixelPalette" style="display:flex;gap:5px;justify-content:center;flex-wrap:wrap;"></div>
+      <div style="display:flex;gap:6px;align-items:center;justify-content:center;margin-top:8px;">
+        <label style="font-size:11px;color:#aaa;">Custom color</label>
+        <input type="color" id="pixelColorCustom" value="#ff0000" oninput="setPixelColor(this.value)">
+      </div>
+      <div style="display:flex;gap:8px;justify-content:center;margin-top:14px;flex-wrap:wrap;">
+        <button class="btn btn-action" onclick="applyPixelArtToSelected()">✔ Apply to selected object</button>
+        <button class="btn btn-action" onclick="addPixelArtPicture()">🖼️ Add as a picture</button>
+      </div>
     </div>
   </div>
 
@@ -275,6 +315,14 @@
         mesh.add(arrowMesh);
 
         mesh.position.set(0, 0, 0);
+      } else if (typeName === 'pixelart') {
+        const pa = (customData && customData.pixelArt) ? customData.pixelArt : { size: 16, pixels: new Array(256).fill(null) };
+        const tex = makePixelTexture(pa);
+        const geo = new THREE.PlaneGeometry(2, 2);
+        const mat = new THREE.MeshStandardMaterial({ map: tex, transparent: true, side: THREE.DoubleSide, roughness: 0.7 });
+        mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(0, 1, 0);
+        mesh.userData.pixelArt = JSON.parse(JSON.stringify(pa));
       } else if (typeName === 'watch') {
         mesh = new THREE.Group();
 
@@ -318,6 +366,10 @@
         mesh.scale.fromArray(customData.scale);
       }
 
+      if (customData && customData.pixelArt && typeName !== 'pixelart') {
+        applyPixelArtToObject(mesh, customData.pixelArt);
+      }
+
       if (typeName === 'watch') {
         mesh.userData.watchData = (customData && customData.watch)
           ? customData.watch
@@ -350,6 +402,7 @@
         };
         if (item.type === 'glb' && obj.userData.glbData) item.glbData = obj.userData.glbData;
         if (item.type === 'watch' && obj.userData.watchData) item.watch = obj.userData.watchData;
+        if (obj.userData.pixelArt) item.pixelArt = obj.userData.pixelArt;
         return item;
       });
     }
@@ -453,6 +506,174 @@
     }
     function closeCode() {
       document.getElementById('code-modal-overlay').classList.remove('open');
+    }
+
+    /* ============ PIXEL ART PAINTER ============ */
+    const PIXEL_COLORS = ['#000000','#ffffff','#ff0000','#ff8800','#ffff00','#00cc00','#008800','#0000ff','#66ccff','#9933ff','#ff66cc','#8b4513','#888888','#444444','#ffcc99','#00ffff'];
+    let pixelSize = 16;
+    let pixelPixels = new Array(256).fill(null);
+    let pixelColor = '#ff0000';
+    let pixelTool = 'brush';
+    let pixelPainting = false;
+    let pixelEditTarget = null;
+
+    function makePixelTexture(pa) {
+      const c = document.createElement('canvas');
+      c.width = pa.size; c.height = pa.size;
+      const g = c.getContext('2d');
+      for (let y = 0; y < pa.size; y++) for (let x = 0; x < pa.size; x++) {
+        const col = pa.pixels[y * pa.size + x];
+        if (col) { g.fillStyle = col; g.fillRect(x, y, 1, 1); }
+      }
+      const t = new THREE.CanvasTexture(c);
+      t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter; t.generateMipmaps = false;
+      return t;
+    }
+    function currentPixelArt() {
+      return { size: pixelSize, pixels: pixelPixels.slice() };
+    }
+    function renderPixelPalette() {
+      const pal = document.getElementById('pixelPalette');
+      pal.innerHTML = '';
+      PIXEL_COLORS.forEach(col => {
+        const b = document.createElement('button');
+        b.className = 'pal-swatch' + (pixelColor === col ? ' sel' : '');
+        b.style.background = col;
+        b.title = col;
+        b.onclick = () => { setPixelColor(col); };
+        pal.appendChild(b);
+      });
+    }
+    function setPixelColor(col) {
+      pixelColor = col;
+      const cc = document.getElementById('pixelColorCustom');
+      if (cc) cc.value = col;
+      renderPixelPalette();
+    }
+    function setPixelTool(t) {
+      pixelTool = t;
+      document.getElementById('toolBrush').classList.toggle('active', t === 'brush');
+      document.getElementById('toolEraser').classList.toggle('active', t === 'eraser');
+      document.getElementById('toolFill').classList.toggle('active', t === 'fill');
+    }
+    function setPixelSize(n) {
+      pixelSize = n;
+      pixelPixels = new Array(n * n).fill(null);
+      document.querySelectorAll('.pixel-size').forEach(b => b.classList.toggle('active', parseInt(b.dataset.size) === n));
+      drawPixelCanvas();
+    }
+    function clearPixelArt() {
+      pixelPixels = new Array(pixelSize * pixelSize).fill(null);
+      drawPixelCanvas();
+    }
+    function drawPixelCanvas() {
+      const cv = document.getElementById('pixelCanvas');
+      const g = cv.getContext('2d');
+      const cell = cv.width / pixelSize;
+      g.clearRect(0, 0, cv.width, cv.height);
+      for (let y = 0; y < pixelSize; y++) for (let x = 0; x < pixelSize; x++) {
+        const col = pixelPixels[y * pixelSize + x];
+        if (col) { g.fillStyle = col; g.fillRect(x * cell, y * cell, cell, cell); }
+        else { g.fillStyle = ((x + y) % 2 === 0) ? '#ffffff' : '#dddddd'; g.fillRect(x * cell, y * cell, cell, cell); }
+      }
+      g.strokeStyle = 'rgba(0,0,0,0.15)'; g.lineWidth = 1;
+      for (let i = 0; i <= pixelSize; i++) {
+        g.beginPath(); g.moveTo(i * cell, 0); g.lineTo(i * cell, cv.height); g.stroke();
+        g.beginPath(); g.moveTo(0, i * cell); g.lineTo(cv.width, i * cell); g.stroke();
+      }
+    }
+    function pixelCellFromEvent(e) {
+      const cv = document.getElementById('pixelCanvas');
+      const r = cv.getBoundingClientRect();
+      const x = Math.floor((e.clientX - r.left) / r.width * pixelSize);
+      const y = Math.floor((e.clientY - r.top) / r.height * pixelSize);
+      if (x < 0 || y < 0 || x >= pixelSize || y >= pixelSize) return null;
+      return { x, y };
+    }
+    function paintPixelCell(cell) {
+      if (!cell) return;
+      const i = cell.y * pixelSize + cell.x;
+      if (pixelTool === 'eraser') { pixelPixels[i] = null; }
+      else if (pixelTool === 'fill') { floodFillPixel(cell.x, cell.y, pixelPixels[i], pixelColor); }
+      else { pixelPixels[i] = pixelColor; }
+      drawPixelCanvas();
+    }
+    function floodFillPixel(x, y, target, replacement) {
+      if (target === replacement) return;
+      const stack = [[x, y]];
+      while (stack.length) {
+        const c = stack.pop();
+        const cx = c[0], cy = c[1];
+        if (cx < 0 || cy < 0 || cx >= pixelSize || cy >= pixelSize) continue;
+        const i = cy * pixelSize + cx;
+        if (pixelPixels[i] !== target) continue;
+        pixelPixels[i] = replacement;
+        stack.push([cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]);
+      }
+    }
+    function openPixelArt() {
+      pixelEditTarget = null;
+      pixelSize = 16;
+      pixelPixels = new Array(256).fill(null);
+      document.querySelectorAll('.pixel-size').forEach(b => b.classList.toggle('active', parseInt(b.dataset.size) === 16));
+      renderPixelPalette();
+      drawPixelCanvas();
+      const cv = document.getElementById('pixelCanvas');
+      cv.onpointerdown = (e) => { pixelPainting = true; cv.setPointerCapture(e.pointerId); paintPixelCell(pixelCellFromEvent(e)); };
+      cv.onpointermove = (e) => { if (pixelPainting && pixelTool !== 'fill') paintPixelCell(pixelCellFromEvent(e)); };
+      cv.onpointerup = () => { pixelPainting = false; };
+      cv.onpointerleave = () => { pixelPainting = false; };
+      document.getElementById('pixel-modal-overlay').classList.add('open');
+    }
+    function editPixelArtForSelected() {
+      if (!selectedObject || !selectedObject.userData.pixelArt) return;
+      const pa = selectedObject.userData.pixelArt;
+      pixelEditTarget = selectedObject;
+      pixelSize = pa.size;
+      pixelPixels = pa.pixels.slice();
+      document.querySelectorAll('.pixel-size').forEach(b => b.classList.toggle('active', parseInt(b.dataset.size) === pixelSize));
+      renderPixelPalette();
+      drawPixelCanvas();
+      const cv = document.getElementById('pixelCanvas');
+      cv.onpointerdown = (e) => { pixelPainting = true; cv.setPointerCapture(e.pointerId); paintPixelCell(pixelCellFromEvent(e)); };
+      cv.onpointermove = (e) => { if (pixelPainting && pixelTool !== 'fill') paintPixelCell(pixelCellFromEvent(e)); };
+      cv.onpointerup = () => { pixelPainting = false; };
+      cv.onpointerleave = () => { pixelPainting = false; };
+      document.getElementById('pixel-modal-overlay').classList.add('open');
+    }
+    function closePixelArt() {
+      document.getElementById('pixel-modal-overlay').classList.remove('open');
+      pixelEditTarget = null;
+    }
+    function applyPixelArtToObject(obj, pa) {
+      if (!obj || !obj.material) return;
+      obj.userData.pixelArt = JSON.parse(JSON.stringify(pa));
+      obj.material.map = makePixelTexture(pa);
+      obj.material.transparent = true;
+      obj.material.needsUpdate = true;
+    }
+    function removePixelArtFromSelected() {
+      if (!selectedObject) return;
+      delete selectedObject.userData.pixelArt;
+      if (selectedObject.material) {
+        selectedObject.material.map = null;
+        selectedObject.material.transparent = false;
+        selectedObject.material.needsUpdate = true;
+      }
+      updateInspector();
+    }
+    function applyPixelArtToSelected() {
+      const target = pixelEditTarget || selectedObject;
+      if (!target) { showEnginePopup('Select an object first, then paint it.'); return; }
+      applyPixelArtToObject(target, currentPixelArt());
+      closePixelArt();
+      selectObject(target);
+      showEnginePopup('Pixel art applied to ' + target.name + '!');
+    }
+    function addPixelArtPicture() {
+      const pa = currentPixelArt();
+      closePixelArt();
+      addPrimitive('pixelart', { type: 'pixelart', name: 'pixelart_' + (gameObjects.length + 1), pixelArt: pa, position: [0, 1, 0], rotation: [0, 0, 0], scale: [1, 1, 1] });
     }
 
     /* ============ GLB MODEL IMPORT ============ */
@@ -585,6 +806,7 @@
         'scene.add(sun);',
         ...(showGrid ? ['scene.add(new THREE.GridHelper(60,60,0xffffff,0xbbbbbb));'] : []),
         'var solids=[];var clickTargets=[];',
+        'function pixelTex(pa){var c=document.createElement("canvas");c.width=pa.size;c.height=pa.size;var g=c.getContext("2d");for(var y=0;y<pa.size;y++)for(var x=0;x<pa.size;x++){var col=pa.pixels[y*pa.size+x];if(col){g.fillStyle=col;g.fillRect(x,y,1,1);}}var t=new THREE.CanvasTexture(c);t.magFilter=THREE.NearestFilter;t.minFilter=THREE.NearestFilter;t.generateMipmaps=false;return t;}',
         'var spawnPt=null;',
         'function regBox(o){var b=new THREE.Box3().setFromObject(o);solids.push({x0:b.min.x,x1:b.max.x,y0:b.min.y,y1:b.max.y,z0:b.min.z,z1:b.max.z});}',
         'SCENE.forEach(function(it){',
@@ -592,6 +814,7 @@
         'if(it.type==="cube"){o=new THREE.Mesh(new THREE.BoxGeometry(1,1,1),new THREE.MeshStandardMaterial({color:it.color,roughness:.7}));}',
         'else if(it.type==="sphere"){o=new THREE.Mesh(new THREE.SphereGeometry(0.6,24,18),new THREE.MeshStandardMaterial({color:it.color,roughness:.7}));}',
         'else if(it.type==="spawnpoint"){spawnPt=it;return;}',
+        'else if(it.type==="pixelart"&&it.pixelArt){o=new THREE.Mesh(new THREE.PlaneGeometry(2,2),new THREE.MeshStandardMaterial({map:pixelTex(it.pixelArt),transparent:true,side:THREE.DoubleSide,roughness:.7}));}',
         'else if(it.type==="watch"){return;}',
         'else if(it.type==="glb"&&it.glbData){',
         '(function(){var s=atob(it.glbData);var u=new Uint8Array(s.length);for(var i=0;i<s.length;i++)u[i]=s.charCodeAt(i);',
@@ -606,6 +829,7 @@
         'o.rotation.set(it.rotation[0],it.rotation[1],it.rotation[2]);',
         'o.scale.set(it.scale[0],it.scale[1],it.scale[2]);',
         'o.castShadow=true;o.receiveShadow=true;',
+        'if(it.pixelArt){o.material.map=pixelTex(it.pixelArt);o.material.transparent=true;o.material.needsUpdate=true;}',
         'scene.add(o);regBox(o);o.userData.clickName=it.name;clickTargets.push(o);});',
         'var R=0.45;',
         'var pos=new THREE.Vector3(0,0,6),vel=new THREE.Vector3(),yaw=0,pitch=0,grounded=false;',
@@ -811,6 +1035,7 @@
         if (obj.userData.primitiveType === 'spawnpoint') icon = '📍';
         if (obj.userData.primitiveType === 'glb') icon = '🧊';
         if (obj.userData.primitiveType === 'watch') icon = '⌚';
+        if (obj.userData.primitiveType === 'pixelart') icon = '🎨';
 
         div.innerText = `${icon} ${obj.name}`;
         div.onclick = () => selectObject(obj);
@@ -840,6 +1065,12 @@
           <input type="color" id="matColor" value="${currentColor}" oninput="updateSelectedColor(this.value)">
         </div>
       `;
+      const canPaint = ['cube', 'sphere', 'pixelart'].indexOf(selectedObject.userData.primitiveType) !== -1;
+      const hasPixel = !!(selectedObject.userData && selectedObject.userData.pixelArt);
+      const pixelSection = canPaint ? `
+        <div class="section-header">🎨 Pixel Art</div>
+        ${hasPixel ? '<div style="font-size:11px;color:#888;margin-bottom:6px;">This object has pixel art on it.</div><button class="btn btn-action" style="margin-right:6px;" onclick="editPixelArtForSelected()">✏️ Edit pixel art</button><button class="btn btn-danger" onclick="removePixelArtFromSelected()">Remove</button>' : '<div style="font-size:11px;color:#888;margin-bottom:6px;">No pixel art on this object yet.</div><button class="btn btn-action" onclick="openPixelArt()">🎨 Paint pixel art</button>'}
+      ` : '';
       const wd = selectedObject.userData.watchData || { title: 'My Watch', buttons: [] };
       const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
       const watchSection = isWatch ? `
@@ -891,6 +1122,7 @@
         </div>
 
         ${matSection}
+        ${pixelSection}
         ${watchSection}
       `;
 
