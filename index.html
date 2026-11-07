@@ -377,6 +377,7 @@
       mesh.name = name;
       mesh.userData.primitiveType = typeName;
       mesh.userData.isGrabbable = customData ? !!customData.isGrabbable : false;
+      mesh.userData.isPlayer = customData ? !!customData.isPlayer : false;
 
       if (customData) {
         mesh.position.fromArray(customData.position);
@@ -426,6 +427,7 @@
         if (item.type === 'glb' && obj.userData.glbData) item.glbData = obj.userData.glbData;
         if (item.type === 'watch' && obj.userData.watchData) item.watch = obj.userData.watchData;
         if (obj.userData.pixelArt) item.pixelArt = obj.userData.pixelArt;
+        if (obj.userData.isPlayer) item.isPlayer = true;
         return item;
       });
     }
@@ -1046,6 +1048,7 @@
           model.name = item.name;
           model.userData.primitiveType = 'glb';
           model.userData.isGrabbable = !!item.isGrabbable;
+          model.userData.isPlayer = !!item.isPlayer;
           model.userData.glbData = item.glbData;
           model.position.fromArray(item.position);
           model.rotation.set(item.rotation[0], item.rotation[1], item.rotation[2]);
@@ -1125,6 +1128,8 @@
         'function pixelTex(pa){var c=document.createElement("canvas");var g=c.getContext("2d");var t=new THREE.CanvasTexture(c);t.magFilter=THREE.NearestFilter;t.minFilter=THREE.NearestFilter;t.generateMipmaps=false;if(pa.image){var im=new Image();im.onload=function(){c.width=im.naturalWidth;c.height=im.naturalHeight;g.drawImage(im,0,0);t.needsUpdate=true;};im.src=pa.image;c.width=1;c.height=1;}else{c.width=pa.size;c.height=pa.size;for(var y=0;y<pa.size;y++)for(var x=0;x<pa.size;x++){var col=pa.pixels[y*pa.size+x];if(col){g.fillStyle=col;g.fillRect(x,y,1,1);}}}return t;}',
         'var spawnPt=null;',
         'function regBox(o){var b=new THREE.Box3().setFromObject(o);solids.push({x0:b.min.x,x1:b.max.x,y0:b.min.y,y1:b.max.y,z0:b.min.z,z1:b.max.z});}',
+        'var playerMesh=null,playerFootOff=0.9,playerHalfD=0.3,playerEye=1.6;',
+        'function setPlayerDims(o){var b=new THREE.Box3().setFromObject(o);var s=new THREE.Vector3();b.getSize(s);playerFootOff=o.position.y-b.min.y;playerHalfD=Math.max(s.x,s.z)/2;playerEye=Math.max(0.35,s.y*0.92);}',
         'SCENE.forEach(function(it){',
         'var o=null;',
         'if(it.type==="cube"){o=new THREE.Mesh(new THREE.BoxGeometry(1,1,1),new THREE.MeshStandardMaterial({color:it.color,roughness:.7}));}',
@@ -1139,17 +1144,17 @@
         'm.rotation.set(it.rotation[0],it.rotation[1],it.rotation[2]);',
         'm.scale.set(it.scale[0],it.scale[1],it.scale[2]);',
         'm.traverse(function(n){if(n.isMesh)n.castShadow=true;});',
-        'scene.add(m);regBox(m);m.userData.clickName=it.name;clickTargets.push(m);});})();return;}',
+        'scene.add(m);if(it.isPlayer){playerMesh=m;setPlayerDims(m);}else regBox(m);m.userData.clickName=it.name;clickTargets.push(m);});})();return;}',
         'if(!o)return;',
         'o.position.set(it.position[0],it.position[1],it.position[2]);',
         'o.rotation.set(it.rotation[0],it.rotation[1],it.rotation[2]);',
         'o.scale.set(it.scale[0],it.scale[1],it.scale[2]);',
         'o.castShadow=true;o.receiveShadow=true;',
         'if(it.pixelArt){if(it.type==="cube"){var _fa=it.pixelArt.faceArt||null;var _pf=_fa?["right","left","top","bottom","front","back"].filter(function(fn){return _fa[fn];}):((it.pixelArt.faces&&it.pixelArt.faces.length)?it.pixelArt.faces:["right","left","top","bottom","front","back"]);var _fo=["right","left","top","bottom","front","back"];var _tx=pixelTex(it.pixelArt);o.material=_fo.map(function(fn){var _ft=(_fa&&_fa[fn])?pixelTex(_fa[fn]):_tx;return _pf.indexOf(fn)!==-1?new THREE.MeshStandardMaterial({map:_ft,transparent:true,roughness:.7,color:0xffffff}):new THREE.MeshStandardMaterial({color:it.color,roughness:.7});});}else{o.material.map=pixelTex(it.pixelArt);o.material.color.set(0xffffff);o.material.transparent=true;o.material.needsUpdate=true;}}',
-        'scene.add(o);regBox(o);o.userData.clickName=it.name;clickTargets.push(o);});',
-        'var R=0.45;',
+        'scene.add(o);if(it.isPlayer){playerMesh=o;setPlayerDims(o);}else regBox(o);o.userData.clickName=it.name;clickTargets.push(o);});',
+        'var R=0.45;if(playerMesh)R=Math.max(0.45,playerHalfD);',
         'var pos=new THREE.Vector3(0,0,6),vel=new THREE.Vector3(),yaw=0,pitch=0,grounded=false;',
-        '(function(){var sx=0,sz=6,sy=0.1;if(spawnPt){sx=spawnPt.position[0];sz=spawnPt.position[2];sy=spawnPt.position[1];yaw=spawnPt.rotation[1]||0;}var g=supportAt(sx,sz,sy+1.0);pos.set(sx,Math.max(sy+0.05,g),sz);})();',
+        '(function(){var sx=0,sz=6,sy=0.1;if(spawnPt){sx=spawnPt.position[0];sz=spawnPt.position[2];sy=spawnPt.position[1];yaw=spawnPt.rotation[1]||0;}else if(playerMesh){sx=playerMesh.position.x;sz=playerMesh.position.z;sy=playerMesh.position.y-playerFootOff;}var g=supportAt(sx,sz,sy+1.0);pos.set(sx,Math.max(sy+0.05,g),sz);})();',
         'var keys={};',
         'addEventListener("keydown",function(e){keys[e.code]=true;if(e.code==="Space")e.preventDefault();});',
         'addEventListener("keyup",function(e){keys[e.code]=false;});',
@@ -1208,7 +1213,8 @@
         'if(lastPX===null){lastPX=pos.x;lastPZ=pos.z;}',
         'var sdx=pos.x-lastPX,sdz=pos.z-lastPZ;lastPX=pos.x;lastPZ=pos.z;stepAcc+=Math.sqrt(sdx*sdx+sdz*sdz);',
         'if(stepAcc>=2){stepCount+=Math.floor(stepAcc/2);stepAcc=stepAcc%2;var sc=document.getElementById("stepcount");if(sc)sc.textContent=stepCount;}',
-        'camera.position.set(pos.x,pos.y+1.65,pos.z);',
+        'if(playerMesh){playerMesh.position.set(pos.x,pos.y+playerFootOff,pos.z);playerMesh.rotation.y=yaw;}',
+        'if(playerMesh){var _cf=playerHalfD+0.06;camera.position.set(pos.x+(-Math.sin(yaw))*_cf,pos.y+playerEye,pos.z+(-Math.cos(yaw))*_cf);}else{camera.position.set(pos.x,pos.y+1.65,pos.z);}',
         'renderer.render(scene,camera);})();',
         '<\/script>',
         '<\/body>',
@@ -1295,6 +1301,21 @@
       showEnginePopup('Downloaded ajg-game.zip! Unzip it, then double-click "Play Game" to play.');
     }
 
+    function setSelectedAsPlayer() {
+      if (!selectedObject) return;
+      gameObjects.forEach(o => { o.userData.isPlayer = false; });
+      selectedObject.userData.isPlayer = true;
+      updateHierarchy();
+      updateInspector();
+    }
+
+    function unsetPlayer() {
+      if (!selectedObject) return;
+      selectedObject.userData.isPlayer = false;
+      updateHierarchy();
+      updateInspector();
+    }
+
     function cloneSelected() {
       if (!selectedObject) return;
       const clone = selectedObject.clone(true);
@@ -1302,6 +1323,7 @@
       clone.position.z += 0.5;
       clone.name = `${selectedObject.name}_copy`;
       clone.userData.isGrabbable = !!selectedObject.userData.isGrabbable;
+      clone.userData.isPlayer = false;
       
       if (selectedObject.material) {
         clone.material = selectedObject.material.clone();
@@ -1353,7 +1375,7 @@
         if (obj.userData.primitiveType === 'watch') icon = '⌚';
         if (obj.userData.primitiveType === 'pixelart') icon = '🎨';
 
-        div.innerText = `${icon} ${obj.name}`;
+        div.innerText = `${icon} ${obj.name}${obj.userData.isPlayer ? ' 🧍' : ''}`;
         div.onclick = () => selectObject(obj);
         list.appendChild(div);
       });
@@ -1389,6 +1411,13 @@
       const pixelSection = canPaint ? `
         <div class="section-header">🎨 Art</div>
         ${hasPixel ? '<div style="font-size:11px;color:#888;margin-bottom:6px;">This object has art on it.</div><button class="btn btn-action" style="margin-right:6px;" onclick="editPixelArtForSelected()">✏️ Edit art</button><button class="btn btn-danger" onclick="removePixelArtFromSelected()">Remove</button>' : '<div style="font-size:11px;color:#888;margin-bottom:6px;">No art on this object yet.</div><button class="btn btn-action" onclick="openPixelArt()">🎨 Make art</button>'}
+      ` : '';
+      const isPlayer = !!(selectedObject.userData && selectedObject.userData.isPlayer);
+      // Watches and spawn points are not playable bodies, so they cannot be the player.
+      const canBePlayer = ['spawnpoint', 'watch'].indexOf(selectedObject.userData.primitiveType) === -1;
+      const playerSection = canBePlayer ? `
+        <div class="section-header">🧍 Player</div>
+        ${isPlayer ? '<div style="font-size:11px;color:#8b5cf6;margin-bottom:6px;">★ This object is the player. In Preview and downloads, you play as it in first person — look down to see your body.</div><button class="btn btn-danger" onclick="unsetPlayer()">Remove as player</button>' : '<div style="font-size:11px;color:#888;margin-bottom:6px;">Hook this object up as the player. You will play as it in first person.</div><button class="btn btn-action" onclick="setSelectedAsPlayer()">Set as player</button>'}
       ` : '';
       const wd = selectedObject.userData.watchData || { title: 'My Watch', buttons: [] };
       const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -1441,6 +1470,7 @@
         </div>
 
         ${matSection}
+        ${playerSection}
         ${pixelSection}
         ${watchSection}
       `;
