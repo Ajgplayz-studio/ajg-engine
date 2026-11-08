@@ -1153,8 +1153,8 @@
         'if(it.pixelArt){if(it.type==="cube"){var _fa=it.pixelArt.faceArt||null;var _pf=_fa?["right","left","top","bottom","front","back"].filter(function(fn){return _fa[fn];}):((it.pixelArt.faces&&it.pixelArt.faces.length)?it.pixelArt.faces:["right","left","top","bottom","front","back"]);var _fo=["right","left","top","bottom","front","back"];var _tx=pixelTex(it.pixelArt);o.material=_fo.map(function(fn){var _ft=(_fa&&_fa[fn])?pixelTex(_fa[fn]):_tx;return _pf.indexOf(fn)!==-1?new THREE.MeshStandardMaterial({map:_ft,transparent:true,roughness:.7,color:0xffffff}):new THREE.MeshStandardMaterial({color:it.color,roughness:.7});});}else{o.material.map=pixelTex(it.pixelArt);o.material.color.set(0xffffff);o.material.transparent=true;o.material.needsUpdate=true;}}',
         'scene.add(o);if(it.isPlayer){playerMesh=o;setPlayerDims(o);}else regBox(o);o.userData.clickName=it.name;clickTargets.push(o);});',
         'var R=0.45;if(playerMesh)R=Math.max(0.45,playerHalfD);',
-        'var pos=new THREE.Vector3(0,0,6),vel=new THREE.Vector3(),yaw=0,pitch=0,grounded=false;',
-        '(function(){var sx=0,sz=6,sy=0.1;if(spawnPt){sx=spawnPt.position[0];sz=spawnPt.position[2];sy=spawnPt.position[1];yaw=spawnPt.rotation[1]||0;}else if(playerMesh){sx=playerMesh.position.x;sz=playerMesh.position.z;sy=playerMesh.position.y-playerFootOff;}var g=supportAt(sx,sz,sy+1.0);pos.set(sx,Math.max(sy+0.05,g),sz);})();',
+        'var pos=new THREE.Vector3(0,0,6),vel=new THREE.Vector3(),yaw=0,pitch=0,grounded=false,orbYaw=0,orbPitch=0.35,orbDist=5;',
+        '(function(){var sx=0,sz=6,sy=0.1;if(spawnPt){sx=spawnPt.position[0];sz=spawnPt.position[2];sy=spawnPt.position[1];yaw=spawnPt.rotation[1]||0;}else if(playerMesh){sx=playerMesh.position.x;sz=playerMesh.position.z;sy=playerMesh.position.y-playerFootOff;}var g=supportAt(sx,sz,sy+1.0);pos.set(sx,Math.max(sy+0.05,g),sz);orbYaw=yaw;})();',
         'var keys={};',
         'addEventListener("keydown",function(e){keys[e.code]=true;if(e.code==="Space")e.preventDefault();});',
         'addEventListener("keyup",function(e){keys[e.code]=false;});',
@@ -1162,7 +1162,8 @@
         'document.getElementById("ui").addEventListener("click",function(){var p=renderer.domElement.requestPointerLock();if(p&&p.catch)p.catch(function(){document.getElementById("ui").style.display="flex";});});',
         'document.addEventListener("pointerlockchange",function(){locked=document.pointerLockElement===renderer.domElement;document.getElementById("ui").style.display=locked?"none":"flex";});',
         'document.addEventListener("pointerlockerror",function(){document.getElementById("ui").style.display="flex";});',
-        'document.addEventListener("mousemove",function(e){if(!locked)return;yaw-=e.movementX*0.0022;pitch-=e.movementY*0.0022;pitch=Math.max(-1.45,Math.min(1.45,pitch));});',
+        'document.addEventListener("mousemove",function(e){if(!locked)return;if(playerMesh){orbYaw-=e.movementX*0.0022;orbPitch+=e.movementY*0.0022;orbPitch=Math.max(0.05,Math.min(1.3,orbPitch));}else{yaw-=e.movementX*0.0022;pitch-=e.movementY*0.0022;pitch=Math.max(-1.45,Math.min(1.45,pitch));}});',
+        'document.addEventListener("wheel",function(e){if(!playerMesh)return;orbDist=Math.max(3,Math.min(10,orbDist+e.deltaY*0.01));});',
         'addEventListener("resize",function(){camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});',
         'function supportAt(x,z,fy){var s=0;for(var i=0;i<solids.length;i++){var b=solids[i];if(x>b.x0-R&&x<b.x1+R&&z>b.z0-R&&z<b.z1+R&&b.y1<=fy+0.55&&b.y1>s)s=b.y1;}return s;}',
         'function collideH(){for(var i=0;i<solids.length;i++){var b=solids[i];if(pos.y+1.6<b.y0||pos.y>b.y1-0.35)continue;var a=b.x0-R,c=b.x1+R,d=b.z0-R,e=b.z1+R;if(pos.x>a&&pos.x<c&&pos.z>d&&pos.z<e){var l=pos.x-a,r=c-pos.x,t=pos.z-d,n=e-pos.z;var m=Math.min(l,r,t,n);if(m===l)pos.x=a;else if(m===r)pos.x=c;else if(m===t)pos.z=d;else pos.z=e;}}}',
@@ -1196,7 +1197,7 @@
         '(function tick(){requestAnimationFrame(tick);var dt=Math.min(pclock.getDelta(),0.05);',
         'if(locked){',
         'camera.quaternion.setFromEuler(new THREE.Euler(pitch,yaw,0,"YXZ"));',
-        'fwd.set(-Math.sin(yaw),0,-Math.cos(yaw));rgt.set(Math.cos(yaw),0,-Math.sin(yaw));',
+        'var myaw=playerMesh?orbYaw:yaw;fwd.set(-Math.sin(myaw),0,-Math.cos(myaw));rgt.set(Math.cos(myaw),0,-Math.sin(myaw));',
         'var sp=(keys["ShiftLeft"]||keys["ShiftRight"])?9:5.5;',
         'var ix=((keys["KeyD"]||keys["ArrowRight"])?1:0)-((keys["KeyA"]||keys["ArrowLeft"])?1:0);',
         'var iz=((keys["KeyW"]||keys["ArrowUp"])?1:0)-((keys["KeyS"]||keys["ArrowDown"])?1:0);',
@@ -1213,8 +1214,8 @@
         'if(lastPX===null){lastPX=pos.x;lastPZ=pos.z;}',
         'var sdx=pos.x-lastPX,sdz=pos.z-lastPZ;lastPX=pos.x;lastPZ=pos.z;stepAcc+=Math.sqrt(sdx*sdx+sdz*sdz);',
         'if(stepAcc>=2){stepCount+=Math.floor(stepAcc/2);stepAcc=stepAcc%2;var sc=document.getElementById("stepcount");if(sc)sc.textContent=stepCount;}',
-        'if(playerMesh){playerMesh.position.set(pos.x,pos.y+playerFootOff,pos.z);playerMesh.rotation.y=yaw;}',
-        'if(playerMesh){var _cf=playerHalfD+0.06;camera.position.set(pos.x+(-Math.sin(yaw))*_cf,pos.y+playerEye,pos.z+(-Math.cos(yaw))*_cf);}else{camera.position.set(pos.x,pos.y+1.65,pos.z);}',
+        'if(playerMesh){playerMesh.position.set(pos.x,pos.y+playerFootOff,pos.z);playerMesh.rotation.y=orbYaw;}',
+        'if(playerMesh){var _ty=pos.y+playerEye;camera.position.set(pos.x+Math.sin(orbYaw)*Math.cos(orbPitch)*orbDist,_ty+Math.sin(orbPitch)*orbDist,pos.z+Math.cos(orbYaw)*Math.cos(orbPitch)*orbDist);camera.lookAt(pos.x,_ty,pos.z);}else{camera.position.set(pos.x,pos.y+1.65,pos.z);}',
         'renderer.render(scene,camera);})();',
         '<\/script>',
         '<\/body>',
@@ -1417,7 +1418,7 @@
       const canBePlayer = ['spawnpoint', 'watch'].indexOf(selectedObject.userData.primitiveType) === -1;
       const playerSection = canBePlayer ? `
         <div class="section-header">🧍 Player</div>
-        ${isPlayer ? '<div style="font-size:11px;color:#8b5cf6;margin-bottom:6px;">★ This object is the player. In Preview and downloads, you play as it in first person — look down to see your body.</div><button class="btn btn-danger" onclick="unsetPlayer()">Remove as player</button>' : '<div style="font-size:11px;color:#888;margin-bottom:6px;">Hook this object up as the player. You will play as it in first person.</div><button class="btn btn-action" onclick="setSelectedAsPlayer()">Set as player</button>'}
+        ${isPlayer ? '<div style="font-size:11px;color:#8b5cf6;margin-bottom:6px;">★ This object is the player. In Preview and downloads, a camera follows it — move the mouse to orbit around it and see the whole avatar.</div><button class="btn btn-danger" onclick="unsetPlayer()">Remove as player</button>' : '<div style="font-size:11px;color:#888;margin-bottom:6px;">Hook this object up as the player. A camera will follow it in Preview and downloads — orbit around it with the mouse.</div><button class="btn btn-action" onclick="setSelectedAsPlayer()">Set as player</button>'}
       ` : '';
       const wd = selectedObject.userData.watchData || { title: 'My Watch', buttons: [] };
       const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
