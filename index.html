@@ -14,6 +14,10 @@
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/TransformControls.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+  <!-- Firebase compat SDK 10.12.2 (same version as AJG Mail / AJG Games) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; }
     body { display: flex; flex-direction: column; height: 100vh; background: #1a1a1a; color: #d4d4d4; }
@@ -127,9 +131,37 @@
     <button class="btn btn-danger" onclick="deleteSelected()">🗑️ Delete</button>
     <button class="btn" onclick="addPrimitive('cube')">+ Cube</button>
     <button class="btn" onclick="addPrimitive('sphere')">+ Sphere</button>
+    <button class="btn" onclick="addPrimitive('particle')">✨ + Particles</button>
+    <button class="btn" onclick="addPrimitive('pointlight')">💡 + Point Light</button>
+    <button class="btn" onclick="addPrimitive('spotlight')">🔦 + Spot Light</button>
+    <button class="btn" onclick="addPrimitive('terrain')">⛰ + Terrain</button>
+    <button class="btn" onclick="addPrimitive('enemy')">👾 + Enemy</button>
+    <button class="btn" onclick="addPrimitive('menu')">📋 + Menu</button>
     <button class="btn" onclick="addPrimitive('spawnpoint')">📍 + Spawn Point</button>
     <button class="btn" onclick="addPrimitive('watch')">⌚ + Watch</button>
     <button class="btn" onclick="openPixelArt()">🎨 Art</button>
+
+    <div style="height:16px; width:1px; background:#444;"></div>
+
+    <!-- Part B: AJG Mail sign-in -->
+    <span id="authSignedOut" style="display:flex;align-items:center;gap:5px;flex-shrink:0;">
+      <input type="email" id="authEmail" placeholder="name@ajgmail.com" autocomplete="username" style="width:150px;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px 6px;border-radius:3px;font-size:11px;">
+      <input type="password" id="authPassword" placeholder="Password" autocomplete="current-password" style="width:100px;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px 6px;border-radius:3px;font-size:11px;">
+      <button class="btn btn-action" id="authSignInBtn" onclick="signInToAjgMail()">Sign In</button>
+    </span>
+    <span id="authSignedIn" style="display:none;align-items:center;gap:5px;flex-shrink:0;">
+      <span id="authUserEmail" style="font-size:11px;color:#4ec9b0;white-space:nowrap;"></span>
+      <button class="btn" onclick="signOutOfAjgMail()">Sign out</button>
+    </span>
+    <span id="authError" style="font-size:11px;color:#ef4444;white-space:nowrap;flex-shrink:0;"></span>
+    <!-- Part C: Collab Requests (only visible when signed in) -->
+    <button class="btn btn-action" id="collabBtn" style="display:none;" onclick="openCollabPanel()">👥 Collab Requests <span id="collabBadge" style="display:none;background:#ef4444;color:#fff;border-radius:8px;padding:0 5px;font-size:10px;"></span></button>
+  </div>
+
+  <!-- Part C: live collab session indicator -->
+  <div id="collabSessionBar" style="display:none;align-items:center;gap:8px;background:#3a0d0d;border-bottom:2px solid #ef4444;color:#fff;padding:5px 12px;font-size:12px;">
+    <span id="collabSessionText">🔴 Live collab</span>
+    <button class="btn btn-danger" onclick="leaveCollabSession()">Leave Session</button>
   </div>
 
   <div id="editor">
@@ -156,15 +188,15 @@
 
   <div id="code-modal-overlay">
     <div class="code-modal-card">
-      <div class="code-modal-head">💻 Game Code <span class="sp"></span>
+      <div class="code-modal-head"><span id="codeModalTitle">💻 Game Code</span><span class="sp"></span>
         <button class="btn btn-action" onclick="previewGame()">▶ Preview</button>
         <button class="btn" onclick="closeCode()">✕ Close</button>
       </div>
       <div class="code-body">
         <div class="blocks-palette" id="blocksPalette"></div>
-        <textarea id="codeEditor" spellcheck="false" oninput="gameCode=this.value" placeholder="// Type JavaScript here, or click the blocks on the left"></textarea>
+        <textarea id="codeEditor" spellcheck="false" oninput="onCodeEditorInput(this.value)" placeholder="// Type JavaScript here, or click the blocks on the left"></textarea>
       </div>
-      <div class="code-foot">Runs in Preview &amp; downloads · onStart · onUpdate(dt) · key("KeyW") · getObject(name) · getSteps() · onClick(name,fn) · moveObject(name,x,y,z) · setObjectPos(name,x,y,z) · after(sec,fn) · repeat(n,fn) · say(text)</div>
+      <div class="code-foot">Runs in Preview &amp; downloads · onStart · onUpdate(dt) · key("KeyW") · getObject(name) · getSteps() · onClick(name,fn) · moveObject(name,x,y,z) · setObjectPos(name,x,y,z) · after(sec,fn) · repeat(n,fn) · say(text) · playSound("coin"|"jump"|"explosion"|"click") · playMusic("cheerful"|"calm") · stopMusic()</div>
     </div>
   </div>
 
@@ -216,6 +248,26 @@
     </div>
   </div>
 
+  <!-- Part C: Collab Requests panel -->
+  <div id="collab-modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10001;align-items:center;justify-content:center;">
+    <div style="background:#252526;border:1px solid #007acc;border-radius:10px;width:min(560px,94vw);max-height:88vh;overflow-y:auto;padding:16px;box-shadow:0 20px 60px rgba(0,0,0,.8);">
+      <div style="display:flex;align-items:center;gap:10px;font-weight:bold;color:#007acc;font-size:15px;">👥 Collab Requests <span style="flex:1"></span><button class="btn" onclick="closeCollabPanel()">✕ Close</button></div>
+      <div style="font-size:11px;color:#888;margin-top:4px;">Invite a friend into the project you have open right now, or accept an invite into theirs. Edits sync live while you're in a session.</div>
+      <div class="section-header">Incoming requests</div>
+      <div id="collabRequestsList" style="font-size:12px;color:#aaa;">No requests yet.</div>
+      <div class="section-header">Send a request</div>
+      <div style="font-size:11px;color:#888;margin-bottom:6px;">Project: <span id="collabCurrentProject" style="color:#d4d4d4;">My Project</span></div>
+      <div class="prop-row"><label>Project name</label>
+        <input type="text" id="collabProjectName" value="My Project" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+      </div>
+      <div class="prop-row"><label>Friend's email</label>
+        <input type="email" id="collabFriendEmail" placeholder="friend@ajgmail.com" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+      </div>
+      <button class="btn btn-action" onclick="sendCollabRequest()">📨 Send request</button>
+      <div id="collabSendMsg" style="font-size:11px;color:#4ec9b0;margin-top:6px;"></div>
+    </div>
+  </div>
+
   <div id="preview-overlay" style="display:none;position:fixed;inset:0;z-index:10000;background:#000;">
     <button onclick="closePreview()" style="position:absolute;top:12px;right:12px;z-index:10001;background:#882d2d;color:#fff;border:1px solid #ef4444;padding:8px 16px;border-radius:4px;cursor:pointer;font-size:13px;font-weight:bold;">✕ Close preview</button>
     <iframe id="preview-frame" allow="pointer-lock" style="width:100%;height:100%;border:none;"></iframe>
@@ -248,6 +300,8 @@
     const transformGizmo = new THREE.TransformControls(camera, renderer.domElement);
     transformGizmo.addEventListener('dragging-changed', (event) => {
       orbit.enabled = !event.value;
+      // Part C: a finished gizmo drag is a local edit — sync it.
+      if (!event.value && typeof scheduleCollabPush === 'function') scheduleCollabPush();
     });
     transformGizmo.addEventListener('change', () => {
       if (selectedObject) updateInspectorValues();
@@ -267,12 +321,64 @@
     const gameObjects = [];
     let selectedObject = null;
     let gameCode = '';
+    // Per-object code editing: null = the global game code editor;
+    // {obj, event} = editing that object's event code in the same modal.
+    let editingObjCode = null;
 
     const radToDeg = (r) => (r * 180 / Math.PI);
     const degToRad = (d) => (d * Math.PI / 180);
 
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
+
+    // Terrain brush state (feature 4): size in world units, strength = height
+    // added/removed per dab, mode 'raise' or 'lower'.
+    let terrainBrush = { size: 1, strength: 0.3, mode: 'raise' };
+    let terrainPainting = false;
+    let terrainPaintTarget = null;
+
+    function terrainHeightsDefault() {
+      // 32x32 segments -> (32+1)*(32+1) = 1089 vertices, row-major (iy, ix).
+      return new Array(33 * 33).fill(0);
+    }
+    function applyTerrainHeights(mesh) {
+      const t = mesh.userData.terrain;
+      if (!t || !mesh.geometry || !mesh.geometry.attributes || !mesh.geometry.attributes.position) return;
+      const attr = mesh.geometry.attributes.position;
+      for (let i = 0; i < t.heights.length && i < attr.count; i++) attr.setZ(i, t.heights[i]);
+      attr.needsUpdate = true;
+      if (mesh.geometry.computeVertexNormals) mesh.geometry.computeVertexNormals();
+    }
+    // Raise/lower the terrain heights near a world point (falloff to the edge).
+    function applyTerrainBrush(mesh, point) {
+      const t = mesh.userData.terrain;
+      if (!t) return;
+      const seg = t.segments || 32;
+      const size = t.size || 20;
+      const attr = mesh.geometry.attributes.position;
+      const v = new THREE.Vector3();
+      const delta = (terrainBrush.mode === 'lower' ? -1 : 1) * terrainBrush.strength;
+      for (let iy = 0; iy <= seg; iy++) {
+        for (let ix = 0; ix <= seg; ix++) {
+          const i = iy * (seg + 1) + ix;
+          v.fromBufferAttribute(attr, i);
+          mesh.localToWorld(v);
+          const dx = v.x - point.x, dz = v.z - point.z;
+          const d = Math.sqrt(dx * dx + dz * dz);
+          if (d < terrainBrush.size) {
+            t.heights[i] = (t.heights[i] || 0) + delta * (1 - d / terrainBrush.size);
+          }
+        }
+      }
+      applyTerrainHeights(mesh);
+    }
+    function terrainHitFromEvent(event) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      mouse.x = ((event.clientX - rect.left) / container.clientWidth) * 2 - 1;
+      mouse.y = -((event.clientY - rect.top) / container.clientHeight) * 2 + 1;
+      raycaster.setFromCamera(mouse, camera);
+      return raycaster.intersectObjects(gameObjects, true);
+    }
 
     renderer.domElement.addEventListener('pointerdown', (event) => {
       if (transformGizmo.dragging) return;
@@ -290,7 +396,26 @@
           hitObj = hitObj.parent;
         }
         selectObject(hitObj);
+        // Click-drag on a selected terrain paints it with the brush.
+        if (hitObj.userData.primitiveType === 'terrain') {
+          terrainPainting = true;
+          terrainPaintTarget = hitObj;
+          orbit.enabled = false;
+          applyTerrainBrush(hitObj, intersects[0].point);
+        }
       }
+    });
+    renderer.domElement.addEventListener('pointermove', (event) => {
+      if (!terrainPainting || !terrainPaintTarget) return;
+      const hits = terrainHitFromEvent(event);
+      for (let i = 0; i < hits.length; i++) {
+        let h = hits[i].object;
+        while (h.parent && h.parent !== scene && gameObjects.includes(h.parent)) h = h.parent;
+        if (h === terrainPaintTarget) { applyTerrainBrush(terrainPaintTarget, hits[i].point); break; }
+      }
+    });
+    renderer.domElement.addEventListener('pointerup', () => {
+      if (terrainPainting) { terrainPainting = false; terrainPaintTarget = null; orbit.enabled = true; }
     });
 
     function addPrimitive(type, customData = null) {
@@ -372,6 +497,101 @@
         mesh.add(strap2);
 
         mesh.position.set(0, 0, 0);
+      } else if (typeName === 'particle') {
+        // Feature 1: particle emitter. Group = glowing marker + live Points preview.
+        mesh = new THREE.Group();
+        const pc = (customData && customData.particle) ? customData.particle : { rate: 10, lifetime: 2, size: 0.2, color: '#ffaa00', spread: 0.5, gravity: -2 };
+        mesh.userData.particle = { rate: pc.rate !== undefined ? pc.rate : 10, lifetime: pc.lifetime !== undefined ? pc.lifetime : 2, size: pc.size !== undefined ? pc.size : 0.2, color: pc.color || '#ffaa00', spread: pc.spread !== undefined ? pc.spread : 0.5, gravity: pc.gravity !== undefined ? pc.gravity : -2 };
+        const markerMat = new THREE.MeshStandardMaterial({ color: mesh.userData.particle.color, emissive: mesh.userData.particle.color, emissiveIntensity: 0.9, roughness: 0.3 });
+        const marker = new THREE.Mesh(new THREE.SphereGeometry(0.15, 12, 12), markerMat);
+        mesh.add(marker);
+        const pgeo = new THREE.BufferGeometry();
+        const pcount = 60;
+        const parr = new Float32Array(pcount * 3);
+        for (let i = 0; i < pcount; i++) {
+          parr[i * 3] = (Math.random() - 0.5) * mesh.userData.particle.spread * 2;
+          parr[i * 3 + 1] = Math.random() * mesh.userData.particle.spread;
+          parr[i * 3 + 2] = (Math.random() - 0.5) * mesh.userData.particle.spread * 2;
+        }
+        pgeo.setAttribute('position', new THREE.Float32BufferAttribute(parr, 3));
+        const pmat = new THREE.PointsMaterial({ color: mesh.userData.particle.color, size: mesh.userData.particle.size, transparent: true, opacity: 0.9 });
+        const pts = new THREE.Points(pgeo, pmat);
+        pts.name = 'preview-points';
+        mesh.add(pts);
+        mesh.position.set(0, 1, 0);
+      } else if (typeName === 'pointlight') {
+        // Feature 2: real point light + small visible marker so it can be clicked.
+        mesh = new THREE.Group();
+        const lc = (customData && customData.light) ? customData.light : { color: '#ffffff', intensity: 1, distance: 10 };
+        mesh.userData.light = { color: lc.color || '#ffffff', intensity: lc.intensity !== undefined ? lc.intensity : 1, distance: lc.distance !== undefined ? lc.distance : 10 };
+        const lmarker = new THREE.Mesh(new THREE.SphereGeometry(0.14, 12, 12), new THREE.MeshStandardMaterial({ color: mesh.userData.light.color, emissive: mesh.userData.light.color, emissiveIntensity: 1, roughness: 0.3 }));
+        mesh.add(lmarker);
+        const pl = new THREE.PointLight(mesh.userData.light.color, mesh.userData.light.intensity, mesh.userData.light.distance);
+        mesh.add(pl);
+        mesh.position.set(0, 2, 0);
+      } else if (typeName === 'spotlight') {
+        // Feature 2: real spot light (angle too) + visible marker.
+        mesh = new THREE.Group();
+        const lc = (customData && customData.light) ? customData.light : { color: '#ffffff', intensity: 1, distance: 15, angle: 0.5 };
+        mesh.userData.light = { color: lc.color || '#ffffff', intensity: lc.intensity !== undefined ? lc.intensity : 1, distance: lc.distance !== undefined ? lc.distance : 15, angle: lc.angle !== undefined ? lc.angle : 0.5 };
+        const smarker = new THREE.Mesh(new THREE.SphereGeometry(0.14, 12, 12), new THREE.MeshStandardMaterial({ color: mesh.userData.light.color, emissive: mesh.userData.light.color, emissiveIntensity: 1, roughness: 0.3 }));
+        mesh.add(smarker);
+        const cone = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.5, 12), new THREE.MeshStandardMaterial({ color: 0x888888, emissive: mesh.userData.light.color, emissiveIntensity: 0.25, roughness: 0.5, transparent: true, opacity: 0.7 }));
+        cone.rotation.x = Math.PI;
+        cone.position.y = -0.32;
+        mesh.add(cone);
+        const sl = new THREE.SpotLight(mesh.userData.light.color, mesh.userData.light.intensity, mesh.userData.light.distance, mesh.userData.light.angle, 0.5);
+        const tgt = new THREE.Group();
+        tgt.position.set(0, -1, 0);
+        mesh.add(tgt);
+        sl.target = tgt;
+        mesh.add(sl);
+        mesh.position.set(0, 2.5, 0);
+      } else if (typeName === 'terrain') {
+        // Feature 4: heightfield plane, 32x32 segments over 20x20 units.
+        const tdata = (customData && customData.terrain) ? customData.terrain : null;
+        const tgeo = new THREE.PlaneGeometry(20, 20, 32, 32);
+        const tmat = new THREE.MeshStandardMaterial({ color: customData ? customData.color : 0x55aa44, roughness: 0.9 });
+        mesh = new THREE.Mesh(tgeo, tmat);
+        mesh.rotation.x = -Math.PI / 2;
+        mesh.userData.terrain = {
+          size: 20, segments: 32,
+          heights: (tdata && Array.isArray(tdata.heights) && tdata.heights.length === 1089) ? tdata.heights.slice() : terrainHeightsDefault()
+        };
+        applyTerrainHeights(mesh);
+        mesh.position.set(0, 0, 0);
+      } else if (typeName === 'enemy') {
+        // Feature 6: red chaser with a simple face (two eyes).
+        mesh = new THREE.Group();
+        const ec = (customData && customData.enemy) ? customData.enemy : { speed: 2 };
+        mesh.userData.enemy = { speed: ec.speed !== undefined ? ec.speed : 2 };
+        const body = new THREE.Mesh(new THREE.SphereGeometry(0.6, 24, 18), new THREE.MeshStandardMaterial({ color: customData ? customData.color : 0xcc2222, roughness: 0.4 }));
+        body.position.y = 0.6;
+        mesh.add(body);
+        const eyeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2 });
+        const pupMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.2 });
+        [-0.22, 0.22].forEach(function(ex) {
+          const eye = new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 12), eyeMat);
+          eye.position.set(ex, 0.77, 0.48);
+          mesh.add(eye);
+          const pup = new THREE.Mesh(new THREE.SphereGeometry(0.06, 10, 10), pupMat);
+          pup.position.set(ex, 0.77, 0.59);
+          mesh.add(pup);
+        });
+        mesh.position.set(0, 0, 0);
+      } else if (typeName === 'menu') {
+        // Feature 8: title-screen menu. Editor-only marker; invisible in-game.
+        mesh = new THREE.Group();
+        mesh.userData.menu = (customData && customData.menu)
+          ? { title: customData.menu.title || 'My Game', buttons: (customData.menu.buttons || []).slice() }
+          : { title: 'My Game', buttons: [{ label: 'Start game', action: 'start', code: '' }] };
+        const mbox = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.1, 0.12), new THREE.MeshStandardMaterial({ color: 0x8b5cf6, emissive: 0x8b5cf6, emissiveIntensity: 0.5, roughness: 0.4 }));
+        mbox.position.y = 0.55;
+        mesh.add(mbox);
+        const mdot = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 12), new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.8 }));
+        mdot.position.y = 1.3;
+        mesh.add(mdot);
+        mesh.position.set(0, 0, 0);
       }
 
       mesh.name = name;
@@ -395,10 +615,19 @@
           : { title: 'My Watch', buttons: [] };
       }
 
+      // Feature 3/5/7: per-object animation, sound trigger and physics flag
+      // ride along in .ajg saves and are restored on load.
+      if (customData && customData.anim) mesh.userData.anim = JSON.parse(JSON.stringify(customData.anim));
+      if (customData && customData.code) mesh.userData.objCode = JSON.parse(JSON.stringify(customData.code));
+      if (customData && customData.sound) mesh.userData.sound = { preset: customData.sound.preset || 'coin', trigger: customData.sound.trigger || 'onClick' };
+      if (customData && customData.dynamic) mesh.userData.dynamic = { vel: [0, 0, 0], restitution: (customData.dynamic.restitution !== undefined ? customData.dynamic.restitution : 0.5) };
+      if (customData && customData.menu && typeName === 'menu') mesh.userData.menu = { title: customData.menu.title || 'My Game', buttons: (customData.menu.buttons || []).slice() };
+
       scene.add(mesh);
       gameObjects.push(mesh);
       selectObject(mesh);
       updateHierarchy();
+      if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
     }
 
     function serializeScene() {
@@ -428,6 +657,22 @@
         if (item.type === 'watch' && obj.userData.watchData) item.watch = obj.userData.watchData;
         if (obj.userData.pixelArt) item.pixelArt = obj.userData.pixelArt;
         if (obj.userData.isPlayer) item.isPlayer = true;
+        if (obj.userData.particle) item.particle = JSON.parse(JSON.stringify(obj.userData.particle));
+        if (obj.userData.light) item.light = JSON.parse(JSON.stringify(obj.userData.light));
+        if (obj.userData.terrain) item.terrain = { size: obj.userData.terrain.size, segments: obj.userData.terrain.segments, heights: obj.userData.terrain.heights.slice() };
+        if (obj.userData.enemy) item.enemy = JSON.parse(JSON.stringify(obj.userData.enemy));
+        if (obj.userData.menu) item.menu = JSON.parse(JSON.stringify(obj.userData.menu));
+        if (obj.userData.anim) item.anim = JSON.parse(JSON.stringify(obj.userData.anim));
+        // Per-object code: only events that actually have code are saved.
+        if (obj.userData.objCode) {
+          const oc = {};
+          ['onStart', 'onUpdate', 'onClick', 'onCollide'].forEach(function (ev) {
+            if (obj.userData.objCode[ev]) oc[ev] = obj.userData.objCode[ev];
+          });
+          if (Object.keys(oc).length) item.code = oc;
+        }
+        if (obj.userData.sound) item.sound = JSON.parse(JSON.stringify(obj.userData.sound));
+        if (obj.userData.dynamic) item.dynamic = { restitution: obj.userData.dynamic.restitution !== undefined ? obj.userData.dynamic.restitution : 0.5 };
         return item;
       });
     }
@@ -493,6 +738,9 @@
       {cat:'Sensing', color:'#3ab8e8', label:'⌨️ if W pressed', code:'if (key("KeyW")) {\n  \n}\n'},
       {cat:'Sensing', color:'#3ab8e8', label:'👆 when object clicked', code:'onClick("NAME", () => {\n  \n});\n'},
       {cat:'Looks', color:'#9a6ae8', label:'💬 say hello', code:'say("Hello!");\n'},
+      {cat:'Sound', color:'#e86ad0', label:'🔊 play sound', code:'playSound("coin");\n'},
+      {cat:'Sound', color:'#e86ad0', label:'🎵 play music', code:'playMusic("cheerful");\n'},
+      {cat:'Sound', color:'#e86ad0', label:'⏹ stop music', code:'stopMusic();\n'},
     ];
     function renderBlocks() {
       const pal = document.getElementById('blocksPalette');
@@ -518,19 +766,53 @@
       const ed = document.getElementById('codeEditor');
       const name = (selectedObject && selectedObject.name) ? selectedObject.name : 'myObject';
       code = code.replace(/NAME/g, name);
+      // In per-object mode the event code IS the handler body, so a block
+      // that wraps code in onStart()/onUpdate() would double-wrap it —
+      // insert just the inside of that wrapper instead.
+      if (editingObjCode) {
+        const m = code.match(/^on(?:Start|Update)\([^)]*\) => \{\n([\s\S]*?)\n\}\);?\n?$/);
+        if (m) code = m[1];
+      }
       const s = (ed.selectionStart !== null && ed.selectionStart !== undefined) ? ed.selectionStart : ed.value.length;
       const e = (ed.selectionEnd !== null && ed.selectionEnd !== undefined) ? ed.selectionEnd : s;
       ed.value = ed.value.slice(0, s) + code + ed.value.slice(e);
       ed.focus();
-      gameCode = ed.value;
+      onCodeEditorInput(ed.value);
+    }
+    // One write-back for the code textarea: global gameCode, or the
+    // selected object's event code when the modal is in object mode.
+    function onCodeEditorInput(v) {
+      if (editingObjCode && editingObjCode.obj) {
+        if (!editingObjCode.obj.userData.objCode) editingObjCode.obj.userData.objCode = {};
+        editingObjCode.obj.userData.objCode[editingObjCode.event] = v;
+        if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
+      } else {
+        gameCode = v;
+      }
     }
     function openCode() {
+      editingObjCode = null;
+      document.getElementById('codeModalTitle').textContent = '💻 Game Code';
       document.getElementById('codeEditor').value = gameCode;
+      renderBlocks();
+      document.getElementById('code-modal-overlay').classList.add('open');
+    }
+    // Open the SAME code modal for one event of the selected object.
+    function openObjCode(event) {
+      if (!selectedObject) return;
+      if (!selectedObject.userData.objCode) selectedObject.userData.objCode = {};
+      editingObjCode = { obj: selectedObject, event: event };
+      document.getElementById('codeModalTitle').textContent = '💻 ' + selectedObject.name + ' — ' + event;
+      document.getElementById('codeEditor').value = selectedObject.userData.objCode[event] || '';
       renderBlocks();
       document.getElementById('code-modal-overlay').classList.add('open');
     }
     function closeCode() {
       document.getElementById('code-modal-overlay').classList.remove('open');
+      editingObjCode = null;
+      document.getElementById('codeModalTitle').textContent = '💻 Game Code';
+      // Refresh the "has code" indicators in the inspector.
+      if (selectedObject) updateInspector();
     }
 
     /* ============ PIXEL ART PAINTER ============ */
@@ -1050,6 +1332,7 @@
           model.userData.isGrabbable = !!item.isGrabbable;
           model.userData.isPlayer = !!item.isPlayer;
           model.userData.glbData = item.glbData;
+          if (item.code) model.userData.objCode = JSON.parse(JSON.stringify(item.code));
           model.position.fromArray(item.position);
           model.rotation.set(item.rotation[0], item.rotation[1], item.rotation[2]);
           model.scale.fromArray(item.scale);
@@ -1090,6 +1373,9 @@
         '<title>My AJG Game</title>',
         '<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"><\/script>',
         '<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"><\/script>',
+        '<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"><\/script>',
+        '<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"><\/script>',
+        '<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"><\/script>',
         '<style>',
         'html,body{margin:0;height:100%;overflow:hidden;background:#87ceeb;font-family:sans-serif}',
         '#ui{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.65);color:#fff;z-index:10;cursor:pointer}',
@@ -1098,8 +1384,21 @@
         '<\/style>',
         '<\/head>',
         '<body>',
-        '<div id="ui"><div style="text-align:center"><h1>My AJG Game</h1><p>Click to play &mdash; WASD move &middot; Mouse look &middot; Space jump<\/p><\/div><\/div>',
-        '<div id="hud">WASD move &middot; Space jump &middot; 👣 <span id="stepcount">0</span> steps<\/div>',
+        '<div id="ui"><div style="text-align:center"><h1>My AJG Game</h1><p>Click to play &mdash; WASD move &middot; Mouse look &middot; Space jump<\/p><button id="mpbtn" onclick="event.stopPropagation();openMpPanel();" style="margin-top:14px;padding:12px 22px;border-radius:10px;border:1px solid rgba(255,255,255,.3);background:#007acc;color:#fff;font-size:16px;font-weight:700;cursor:pointer;">🌐 Multiplayer<\/button><\/div><\/div>',
+        '<div id="hud">WASD move &middot; Space jump &middot; 👣 <span id="stepcount">0</span> steps &middot; ❤ <span id="hpcount">100</span> HP <span id="mpinfo" style="display:none">&middot; 🌐 Room <span id="mpcode">?<\/span> &middot; <span id="mpcount">1<\/span> player(s)<\/span><\/div>',
+        '<div id="menuoverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);color:#fff;z-index:30;align-items:center;justify-content:center;"><div style="text-align:center;max-width:90vw;"><h1 id="menutitle" style="font-size:42px;margin:0 0 24px;">My Game<\/h1><div id="menubtns"><\/div><button id="mpbtnMenu" onclick="openMpPanel();" style="display:block;width:min(280px,80vw);margin:0 auto 12px;padding:14px;border-radius:12px;border:1px solid rgba(255,255,255,.25);background:#007acc;color:#fff;font-size:17px;font-weight:700;cursor:pointer;">🌐 Multiplayer<\/button><\/div><\/div>',
+        '<div id="mppanel" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);color:#fff;z-index:40;align-items:center;justify-content:center;"><div style="background:#1e1e1e;border:1px solid #007acc;border-radius:10px;padding:20px;width:min(340px,90vw);text-align:center;">',
+        '<h2 style="margin:0 0 6px;font-size:20px;">🌐 Multiplayer<\/h2>',
+        '<div style="font-size:12px;color:#aaa;margin-bottom:8px;">Play together — share the room code with a friend.<\/div>',
+        '<div id="mperr" style="color:#ef4444;font-size:13px;min-height:18px;"><\/div>',
+        '<input id="mpname" placeholder="Your name" style="display:block;width:100%;margin:6px 0;padding:10px;border-radius:6px;border:1px solid #555;background:#111;color:#fff;font-size:15px;">',
+        '<input id="mpcodein" placeholder="Room code (e.g. ABCDEF)" style="display:block;width:100%;margin:6px 0;padding:10px;border-radius:6px;border:1px solid #555;background:#111;color:#fff;font-size:15px;text-transform:uppercase;">',
+        '<button onclick="mpJoinClicked()" style="display:block;width:100%;margin:6px 0;padding:12px;border-radius:8px;border:none;background:#007acc;color:#fff;font-size:15px;font-weight:700;cursor:pointer;">Join room<\/button>',
+        '<button onclick="mpCreateClicked()" style="display:block;width:100%;margin:6px 0;padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,.25);background:#2d5a88;color:#fff;font-size:15px;font-weight:700;cursor:pointer;">Create room<\/button>',
+        '<button id="mpleave" onclick="mpLeaveClicked()" style="display:none;width:100%;margin:6px 0;padding:12px;border-radius:8px;border:1px solid #ef4444;background:#882d2d;color:#fff;font-size:15px;font-weight:700;cursor:pointer;">Leave room<\/button>',
+        '<button onclick="closeMpPanel()" style="display:block;width:100%;margin:6px 0;padding:10px;border-radius:8px;border:1px solid #555;background:#333;color:#fff;font-size:14px;cursor:pointer;">Close<\/button>',
+        '<div id="mpjoined" style="font-size:13px;color:#4ec9b0;margin-top:6px;"><\/div>',
+        '<\/div><\/div>',
         '<div id="saybox" style="display:none;position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.75);color:#fff;padding:10px 22px;border-radius:12px;font-size:16px;z-index:6;"><\/div>',
         '<button id="watchbtn" style="display:none;position:fixed;right:18px;bottom:18px;width:52px;height:52px;border-radius:50%;background:rgba(20,24,40,.85);border:1px solid rgba(255,255,255,.15);color:#fff;font-size:24px;z-index:7;cursor:pointer;">⌚<\/button>',
         '<div id="watchui" style="display:none;position:fixed;inset:0;background:rgba(3,5,12,.55);z-index:20;align-items:center;justify-content:center;">',
@@ -1124,7 +1423,30 @@
         'sun.position.set(20,30,10);sun.castShadow=true;',
         'scene.add(sun);',
         ...(showGrid ? ['scene.add(new THREE.GridHelper(60,60,0xffffff,0xbbbbbb));'] : []),
-        'var solids=[];var clickTargets=[];',
+        'var solids=[];var clickTargets=[];var terrains=[];var enemies=[];var particleSystems=[];var dynamics=[];var animated=[];var soundObjs=[];var objCodeObjs=[];',
+        'var hp=100;var gameTime=0;var spawnX=0,spawnY=0.1,spawnZ=6,spawnYaw=0;',
+        'function updateHP(){var h=document.getElementById("hpcount");if(h)h.textContent=hp;}',
+        'function die(){say("You died! Respawning...");hp=100;updateHP();pos.set(spawnX,Math.max(spawnY,0.1),spawnZ);vel.set(0,0,0);yaw=spawnYaw;orbYaw=spawnYaw;}',
+        'function lerpArr(a,b,f){return [a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f,a[2]+(b[2]-a[2])*f];}',
+        'function makeParticleSystem(o,cfg){var pool=Math.max(50,Math.ceil(cfg.rate*cfg.lifetime*2));var arr=new Float32Array(pool*3);for(var i=0;i<pool;i++){arr[i*3+1]=-999;}var g=new THREE.BufferGeometry();g.setAttribute("position",new THREE.BufferAttribute(arr,3));var m=new THREE.PointsMaterial({color:cfg.color,size:cfg.size,transparent:true,opacity:0.9});var pts=new THREE.Points(g,m);pts.position.copy(o.position);scene.add(pts);var parts=[];for(var j=0;j<pool;j++)parts.push({life:0,max:1,vx:0,vy:0,vz:0});return {pts:pts,geo:g,arr:arr,parts:parts,cfg:cfg,acc:0};}',
+        'function spawnParticle(sys){for(var i=0;i<sys.parts.length;i++){var p=sys.parts[i];if(p.life<=0){p.life=p.max=sys.cfg.lifetime;p.vx=(Math.random()-0.5)*sys.cfg.spread*2;p.vy=Math.random()*sys.cfg.spread;p.vz=(Math.random()-0.5)*sys.cfg.spread*2;sys.arr[i*3]=sys.pts.position.x;sys.arr[i*3+1]=sys.pts.position.y;sys.arr[i*3+2]=sys.pts.position.z;return;}}}',
+        'function updateParticles(dt){for(var s=0;s<particleSystems.length;s++){var sys=particleSystems[s];sys.acc+=sys.cfg.rate*dt;while(sys.acc>=1){sys.acc-=1;spawnParticle(sys);}for(var i=0;i<sys.parts.length;i++){var p=sys.parts[i];if(p.life>0){p.life-=dt;p.vy+=sys.cfg.gravity*dt;sys.arr[i*3]+=p.vx*dt;sys.arr[i*3+1]+=p.vy*dt;sys.arr[i*3+2]+=p.vz*dt;if(p.life<=0)sys.arr[i*3+1]=-999;}}sys.geo.attributes.position.needsUpdate=true;}}',
+        'function makeDynamic(it,o){var b=new THREE.Box3().setFromObject(o);var sz=new THREE.Vector3();b.getSize(sz);return {o:o,vel:new THREE.Vector3(),rest:(it.dynamic&&it.dynamic.restitution!==undefined)?it.dynamic.restitution:0.5,half:Math.max(sz.x,sz.z)/2,bottomOff:o.position.y-b.min.y,isSphere:it.type==="sphere",radius:Math.max(sz.x,sz.y,sz.z)/2,grounded:false};}',
+        'function registerObjCode(it,o){if(it.code)objCodeObjs.push({o:o,name:it.name,code:it.code,inside:false});}',
+        'function registerExtras(it,o){if(it.anim&&it.anim.keyframes&&it.anim.keyframes.length)animated.push({o:o,anim:it.anim});if(it.dynamic)dynamics.push(makeDynamic(it,o));if(it.sound)soundObjs.push({o:o,name:it.name,preset:it.sound.preset||"coin",trigger:it.sound.trigger||"onClick",cd:0});registerObjCode(it,o);}',
+        'function terrainHeightAt(t,x,z){var seg=t.seg;var lx=(x-t.x)/t.sx;var ly=(t.z-z)/t.sy;var gx=(lx/20+0.5)*seg;var gz=(0.5-ly/20)*seg;if(gx<0||gz<0||gx>seg||gz>seg)return null;var x0=Math.floor(gx),z0=Math.floor(gz);var x1=Math.min(x0+1,seg),z1=Math.min(z0+1,seg);var fx=gx-x0,fz=gz-z0;var H=t.heights;function hv(ix,iz){return H[iz*(seg+1)+ix];}var h=(hv(x0,z0)*(1-fx)+hv(x1,z0)*fx)*(1-fz)+(hv(x0,z1)*(1-fx)+hv(x1,z1)*fx)*fz;return t.y+h*t.sz;}',
+        'function updateAnims(){for(var i=0;i<animated.length;i++){var a=animated[i];if(a.o===playerMesh)continue;var kf=a.anim.keyframes;if(!kf||!kf.length)continue;var dur=kf[kf.length-1].t;var t=a.anim.loop?(dur>0?(gameTime%dur):0):Math.min(gameTime,dur);var k0=kf[0],k1=kf[kf.length-1];for(var j=0;j<kf.length-1;j++){if(t>=kf[j].t&&t<=kf[j+1].t){k0=kf[j];k1=kf[j+1];break;}}var span=(k1.t-k0.t)||1;var f=Math.max(0,Math.min(1,(t-k0.t)/span));var p=lerpArr(k0.pos,k1.pos,f),r=lerpArr(k0.rot,k1.rot,f),s=lerpArr(k0.scale,k1.scale,f);a.o.position.set(p[0],p[1],p[2]);a.o.rotation.set(r[0],r[1],r[2]);a.o.scale.set(s[0],s[1],s[2]);}}',
+        'function updateDynamics(dt){for(var i=0;i<dynamics.length;i++){var d=dynamics[i];var o=d.o;d.vel.y-=22*dt;o.position.x+=d.vel.x*dt;o.position.z+=d.vel.z*dt;var ny=o.position.y+d.vel.y*dt;var bottom=ny-d.bottomOff;var g=supportAtR(o.position.x,o.position.z,bottom+1,d.half);if(bottom<=g){ny=g+d.bottomOff;if(d.vel.y<-1)d.vel.y=-d.vel.y*d.rest;else d.vel.y=0;d.grounded=true;}else d.grounded=false;o.position.y=ny;var ob=new THREE.Box3().setFromObject(o);for(var s=0;s<solids.length;s++){var b=solids[s];if(ob.max.x>b.x0&&ob.min.x<b.x1&&ob.max.z>b.z0&&ob.min.z<b.z1&&ob.min.y<b.y1-0.05&&ob.max.y>b.y0){if(d.vel.y<=0&&ob.min.y>=b.y1-0.6){o.position.y=b.y1+d.bottomOff;if(d.vel.y<-1)d.vel.y=-d.vel.y*d.rest;else d.vel.y=0;d.grounded=true;}else{var oxl=ob.max.x-b.x0,oxr=b.x1-ob.min.x,ozl=ob.max.z-b.z0,ozr=b.z1-ob.min.z;var m=Math.min(oxl,oxr,ozl,ozr);if(m===oxl){o.position.x-=oxl;d.vel.x=-d.vel.x*d.rest*0.5;}else if(m===oxr){o.position.x+=oxr;d.vel.x=-d.vel.x*d.rest*0.5;}else if(m===ozl){o.position.z-=ozl;d.vel.z=-d.vel.z*d.rest*0.5;}else{o.position.z+=ozr;d.vel.z=-d.vel.z*d.rest*0.5;}ob=new THREE.Box3().setFromObject(o);}}}if(d.grounded&&d.isSphere){var hs=Math.sqrt(d.vel.x*d.vel.x+d.vel.z*d.vel.z);if(hs>0.01){var ax=new THREE.Vector3(d.vel.z/hs,0,-d.vel.x/hs);o.rotateOnWorldAxis(ax,hs*dt/Math.max(0.1,d.radius));}}}}',
+        'function updateEnemies(dt){if(!locked)return;for(var i=0;i<enemies.length;i++){var e=enemies[i];var dx=pos.x-e.mesh.position.x,dz=pos.z-e.mesh.position.z;var dist=Math.sqrt(dx*dx+dz*dz);if(dist>0.6){var sp=e.speed;e.mesh.position.x+=dx/dist*sp*dt;e.mesh.position.z+=dz/dist*sp*dt;}var gy=supportAt(e.mesh.position.x,e.mesh.position.z,e.mesh.position.y+1);e.mesh.position.y=gy+e.yOff;if(dist<0.9&&Math.abs(e.mesh.position.y-pos.y)<2){if(gameTime-e.lastHit>1){e.lastHit=gameTime;hp-=10;updateHP();if(hp<=0)die();}}}}',
+        'function updateSoundCollide(dt){for(var i=0;i<soundObjs.length;i++){var s=soundObjs[i];if(s.trigger!=="onCollide")continue;s.cd-=dt;if(s.cd>0)continue;var b=new THREE.Box3().setFromObject(s.o);if(pos.x>b.min.x-R&&pos.x<b.max.x+R&&pos.z>b.min.z-R&&pos.z<b.max.z+R&&pos.y+1.6>b.min.y&&pos.y<b.max.y){playSound(s.preset);s.cd=0.8;}}}',
+        'function updateObjCollide(){for(var i=0;i<objCodeObjs.length;i++){var oc=objCodeObjs[i];if(!oc.code.onCollide||oc.o===playerMesh)continue;var b=new THREE.Box3().setFromObject(oc.o);var inside=(pos.x>=b.min.x-R&&pos.x<=b.max.x+R&&pos.z>=b.min.z-R&&pos.z<=b.max.z+R&&pos.y+1.6>=b.min.y&&pos.y<=b.max.y);if(inside&&!oc.inside){oc.inside=true;runObjCode(oc.code.onCollide,oc.o,0);}else if(!inside){oc.inside=false;}}}',
+        'var AC=null;var musicTimer=null;var musicNodes=[];',
+        'function ac(){if(!AC){try{AC=new (window.AudioContext||window.webkitAudioContext)();}catch(e){return null;}}if(AC&&AC.state==="suspended")AC.resume();return AC;}',
+        'function tone(freq,dur,type,delay,vol,slideTo){var c=ac();if(!c)return;var t=c.currentTime+(delay||0);var o=c.createOscillator();var g=c.createGain();o.type=type||"sine";o.frequency.setValueAtTime(freq,t);if(slideTo)o.frequency.exponentialRampToValueAtTime(slideTo,t+dur);g.gain.setValueAtTime(vol||0.2,t);g.gain.exponentialRampToValueAtTime(0.001,t+dur);o.connect(g);g.connect(c.destination);o.start(t);o.stop(t+dur+0.02);}',
+        'function noiseBurst(dur,vol){var c=ac();if(!c)return;var len=Math.floor(c.sampleRate*dur);var buf=c.createBuffer(1,len,c.sampleRate);var d=buf.getChannelData(0);for(var i=0;i<len;i++)d[i]=(Math.random()*2-1)*(1-i/len);var src=c.createBufferSource();src.buffer=buf;var f=c.createBiquadFilter();f.type="lowpass";f.frequency.value=900;var g=c.createGain();g.gain.setValueAtTime(vol||0.4,c.currentTime);g.gain.exponentialRampToValueAtTime(0.001,c.currentTime+dur);src.connect(f);f.connect(g);g.connect(c.destination);src.start();}',
+        'function playSound(name){if(name==="jump"){tone(300,0.25,"sine",0,0.25,700);}else if(name==="coin"){tone(988,0.09,"sine",0,0.22);tone(1319,0.18,"sine",0.09,0.22);}else if(name==="explosion"){noiseBurst(0.5,0.4);tone(120,0.4,"sawtooth",0,0.2,40);}else{tone(800,0.06,"square",0,0.15);}}',
+        'function stopMusic(){if(musicTimer){clearInterval(musicTimer);musicTimer=null;}musicNodes.forEach(function(o){try{o.stop();}catch(e){}});musicNodes=[];}',
+        'function playMusic(name){stopMusic();var c=ac();if(!c)return;if(name==="calm"){var chords=[[262,330,392],[247,294,370],[220,262,330],[196,247,294]];var ci=0;musicTimer=setInterval(function(){var ch=chords[ci%chords.length];ci++;ch.forEach(function(f){tone(f,2.2,"triangle",0,0.06);});},2200);chords[0].forEach(function(f){tone(f,2.2,"triangle",0,0.06);});}else{var notes=[523,659,784,1047,784,659,880,784];var ni=0;musicTimer=setInterval(function(){tone(notes[ni%notes.length],0.22,"square",0,0.08);ni++;},240);}}',
         'function pixelTex(pa){var c=document.createElement("canvas");var g=c.getContext("2d");var t=new THREE.CanvasTexture(c);t.magFilter=THREE.NearestFilter;t.minFilter=THREE.NearestFilter;t.generateMipmaps=false;if(pa.image){var im=new Image();im.onload=function(){c.width=im.naturalWidth;c.height=im.naturalHeight;g.drawImage(im,0,0);t.needsUpdate=true;};im.src=pa.image;c.width=1;c.height=1;}else{c.width=pa.size;c.height=pa.size;for(var y=0;y<pa.size;y++)for(var x=0;x<pa.size;x++){var col=pa.pixels[y*pa.size+x];if(col){g.fillStyle=col;g.fillRect(x,y,1,1);}}}return t;}',
         'var spawnPt=null;',
         'function regBox(o){var b=new THREE.Box3().setFromObject(o);solids.push({x0:b.min.x,x1:b.max.x,y0:b.min.y,y1:b.max.y,z0:b.min.z,z1:b.max.z});}',
@@ -1137,6 +1459,12 @@
         'else if(it.type==="spawnpoint"){spawnPt=it;return;}',
         'else if(it.type==="pixelart"&&it.pixelArt){o=new THREE.Mesh(new THREE.PlaneGeometry(2,2),new THREE.MeshStandardMaterial({map:pixelTex(it.pixelArt),transparent:true,side:THREE.DoubleSide,roughness:.7}));}',
         'else if(it.type==="watch"){return;}',
+        'else if(it.type==="menu"){return;}',
+        'else if(it.type==="particle"){var pcfg=it.particle||{rate:10,lifetime:2,size:0.2,color:"#ffaa00",spread:0.5,gravity:-2};particleSystems.push(makeParticleSystem({position:new THREE.Vector3(it.position[0],it.position[1],it.position[2])},pcfg));var pm=new THREE.Mesh(new THREE.SphereGeometry(0.15,12,12),new THREE.MeshStandardMaterial({color:pcfg.color,emissive:pcfg.color,emissiveIntensity:0.9}));pm.position.set(it.position[0],it.position[1],it.position[2]);scene.add(pm);pm.userData.clickName=it.name;clickTargets.push(pm);if(it.sound)soundObjs.push({o:pm,name:it.name,preset:it.sound.preset||"coin",trigger:it.sound.trigger||"onClick",cd:0});registerObjCode(it,pm);return;}',
+        'else if(it.type==="pointlight"){var lcf=it.light||{color:"#ffffff",intensity:1,distance:10};var pl2=new THREE.PointLight(lcf.color,lcf.intensity,lcf.distance);pl2.position.set(it.position[0],it.position[1],it.position[2]);scene.add(pl2);var lm=new THREE.Mesh(new THREE.SphereGeometry(0.14,12,12),new THREE.MeshStandardMaterial({color:lcf.color,emissive:lcf.color,emissiveIntensity:1}));lm.position.set(it.position[0],it.position[1],it.position[2]);scene.add(lm);lm.userData.clickName=it.name;clickTargets.push(lm);registerExtras(it,lm);return;}',
+        'else if(it.type==="spotlight"){var scf=it.light||{color:"#ffffff",intensity:1,distance:15,angle:0.5};var sl2=new THREE.SpotLight(scf.color,scf.intensity,scf.distance,scf.angle||0.5,0.5);sl2.position.set(it.position[0],it.position[1],it.position[2]);var stg=new THREE.Object3D();stg.position.set(it.position[0],it.position[1]-1,it.position[2]);scene.add(stg);sl2.target=stg;scene.add(sl2);var sm=new THREE.Mesh(new THREE.SphereGeometry(0.14,12,12),new THREE.MeshStandardMaterial({color:scf.color,emissive:scf.color,emissiveIntensity:1}));sm.position.set(it.position[0],it.position[1],it.position[2]);scene.add(sm);sm.userData.clickName=it.name;clickTargets.push(sm);registerExtras(it,sm);return;}',
+        'else if(it.type==="terrain"){var tgeo=new THREE.PlaneGeometry(20,20,32,32);var tpa=tgeo.attributes.position;var th=(it.terrain&&it.terrain.heights)?it.terrain.heights:[];for(var ti=0;ti<tpa.count;ti++){tpa.setZ(ti,th[ti]||0);}tgeo.computeVertexNormals();tgeo.rotateX(-Math.PI/2);var tm=new THREE.Mesh(tgeo,new THREE.MeshStandardMaterial({color:it.color,roughness:0.9}));tm.position.set(it.position[0],it.position[1],it.position[2]);tm.scale.set(it.scale[0],it.scale[1],it.scale[2]);tm.receiveShadow=true;scene.add(tm);terrains.push({x:tm.position.x,y:tm.position.y,z:tm.position.z,sx:tm.scale.x,sy:tm.scale.y,sz:tm.scale.z,seg:32,heights:th});tm.userData.clickName=it.name;clickTargets.push(tm);if(it.sound)soundObjs.push({o:tm,name:it.name,preset:it.sound.preset||"coin",trigger:it.sound.trigger||"onClick",cd:0});registerObjCode(it,tm);return;}',
+        'else if(it.type==="enemy"){var eg=new THREE.Group();var eb=new THREE.Mesh(new THREE.SphereGeometry(0.6,24,18),new THREE.MeshStandardMaterial({color:it.color,roughness:0.4}));eb.position.y=0.6;eg.add(eb);[-0.22,0.22].forEach(function(ex){var eye=new THREE.Mesh(new THREE.SphereGeometry(0.13,12,12),new THREE.MeshStandardMaterial({color:0xffffff}));eye.position.set(ex,0.77,0.48);eg.add(eye);var pup=new THREE.Mesh(new THREE.SphereGeometry(0.06,10,10),new THREE.MeshStandardMaterial({color:0x111111}));pup.position.set(ex,0.77,0.59);eg.add(pup);});eg.position.set(it.position[0],it.position[1],it.position[2]);eg.scale.set(it.scale[0],it.scale[1],it.scale[2]);scene.add(eg);enemies.push({mesh:eg,speed:(it.enemy&&it.enemy.speed!==undefined)?it.enemy.speed:2,yOff:0.6*(it.scale[1]||1),lastHit:-10});eg.userData.clickName=it.name;clickTargets.push(eg);registerExtras(it,eg);return;}',
         'else if(it.type==="glb"&&it.glbData){',
         '(function(){var s=atob(it.glbData);var u=new Uint8Array(s.length);for(var i=0;i<s.length;i++)u[i]=s.charCodeAt(i);',
         'new THREE.GLTFLoader().parse(u.buffer,"",function(g){var m=g.scene;',
@@ -1144,17 +1472,17 @@
         'm.rotation.set(it.rotation[0],it.rotation[1],it.rotation[2]);',
         'm.scale.set(it.scale[0],it.scale[1],it.scale[2]);',
         'm.traverse(function(n){if(n.isMesh)n.castShadow=true;});',
-        'scene.add(m);if(it.isPlayer){playerMesh=m;setPlayerDims(m);}else regBox(m);m.userData.clickName=it.name;clickTargets.push(m);});})();return;}',
+        'scene.add(m);if(it.isPlayer){playerMesh=m;setPlayerDims(m);}else if(!it.dynamic)regBox(m);m.userData.clickName=it.name;clickTargets.push(m);registerExtras(it,m);});})();return;}',
         'if(!o)return;',
         'o.position.set(it.position[0],it.position[1],it.position[2]);',
         'o.rotation.set(it.rotation[0],it.rotation[1],it.rotation[2]);',
         'o.scale.set(it.scale[0],it.scale[1],it.scale[2]);',
         'o.castShadow=true;o.receiveShadow=true;',
         'if(it.pixelArt){if(it.type==="cube"){var _fa=it.pixelArt.faceArt||null;var _pf=_fa?["right","left","top","bottom","front","back"].filter(function(fn){return _fa[fn];}):((it.pixelArt.faces&&it.pixelArt.faces.length)?it.pixelArt.faces:["right","left","top","bottom","front","back"]);var _fo=["right","left","top","bottom","front","back"];var _tx=pixelTex(it.pixelArt);o.material=_fo.map(function(fn){var _ft=(_fa&&_fa[fn])?pixelTex(_fa[fn]):_tx;return _pf.indexOf(fn)!==-1?new THREE.MeshStandardMaterial({map:_ft,transparent:true,roughness:.7,color:0xffffff}):new THREE.MeshStandardMaterial({color:it.color,roughness:.7});});}else{o.material.map=pixelTex(it.pixelArt);o.material.color.set(0xffffff);o.material.transparent=true;o.material.needsUpdate=true;}}',
-        'scene.add(o);if(it.isPlayer){playerMesh=o;setPlayerDims(o);}else regBox(o);o.userData.clickName=it.name;clickTargets.push(o);});',
+        'scene.add(o);if(it.isPlayer){playerMesh=o;setPlayerDims(o);}else if(!it.dynamic)regBox(o);o.userData.clickName=it.name;clickTargets.push(o);registerExtras(it,o);});',
         'var R=0.45;if(playerMesh)R=Math.max(0.45,playerHalfD);',
         'var pos=new THREE.Vector3(0,0,6),vel=new THREE.Vector3(),yaw=0,pitch=0,grounded=false,orbYaw=0,orbPitch=0.35,orbDist=5;',
-        '(function(){var sx=0,sz=6,sy=0.1;if(spawnPt){sx=spawnPt.position[0];sz=spawnPt.position[2];sy=spawnPt.position[1];yaw=spawnPt.rotation[1]||0;}else if(playerMesh){sx=playerMesh.position.x;sz=playerMesh.position.z;sy=playerMesh.position.y-playerFootOff;}var g=supportAt(sx,sz,sy+1.0);pos.set(sx,Math.max(sy+0.05,g),sz);orbYaw=yaw;})();',
+        '(function(){var sx=0,sz=6,sy=0.1;if(spawnPt){sx=spawnPt.position[0];sz=spawnPt.position[2];sy=spawnPt.position[1];yaw=spawnPt.rotation[1]||0;}else if(playerMesh){sx=playerMesh.position.x;sz=playerMesh.position.z;sy=playerMesh.position.y-playerFootOff;}var g=supportAt(sx,sz,sy+1.0);pos.set(sx,Math.max(sy+0.05,g),sz);spawnX=sx;spawnY=pos.y;spawnZ=sz;spawnYaw=yaw;orbYaw=yaw;})();',
         'var keys={};',
         'addEventListener("keydown",function(e){keys[e.code]=true;if(e.code==="Space")e.preventDefault();});',
         'addEventListener("keyup",function(e){keys[e.code]=false;});',
@@ -1165,7 +1493,8 @@
         'document.addEventListener("mousemove",function(e){if(!locked)return;if(playerMesh){orbYaw-=e.movementX*0.0022;orbPitch+=e.movementY*0.0022;orbPitch=Math.max(0.05,Math.min(1.3,orbPitch));}else{yaw-=e.movementX*0.0022;pitch-=e.movementY*0.0022;pitch=Math.max(-1.45,Math.min(1.45,pitch));}});',
         'document.addEventListener("wheel",function(e){if(!playerMesh)return;orbDist=Math.max(3,Math.min(10,orbDist+e.deltaY*0.01));});',
         'addEventListener("resize",function(){camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});',
-        'function supportAt(x,z,fy){var s=0;for(var i=0;i<solids.length;i++){var b=solids[i];if(x>b.x0-R&&x<b.x1+R&&z>b.z0-R&&z<b.z1+R&&b.y1<=fy+0.55&&b.y1>s)s=b.y1;}return s;}',
+        'function supportAtR(x,z,fy,rad){var s=0;for(var i=0;i<solids.length;i++){var b=solids[i];if(x>b.x0-rad&&x<b.x1+rad&&z>b.z0-rad&&z<b.z1+rad&&b.y1<=fy+0.55&&b.y1>s)s=b.y1;}for(var j=0;j<terrains.length;j++){var th=terrainHeightAt(terrains[j],x,z);if(th!==null&&th<=fy+0.55&&th>s)s=th;}return s;}',
+        'function supportAt(x,z,fy){return supportAtR(x,z,fy,R);}',
         'function collideH(){for(var i=0;i<solids.length;i++){var b=solids[i];if(pos.y+1.6<b.y0||pos.y>b.y1-0.35)continue;var a=b.x0-R,c=b.x1+R,d=b.z0-R,e=b.z1+R;if(pos.x>a&&pos.x<c&&pos.z>d&&pos.z<e){var l=pos.x-a,r=c-pos.x,t=pos.z-d,n=e-pos.z;var m=Math.min(l,r,t,n);if(m===l)pos.x=a;else if(m===r)pos.x=c;else if(m===t)pos.z=d;else pos.z=e;}}}',
         'var pclock=new THREE.Clock();',
         'var fwd=new THREE.Vector3(),rgt=new THREE.Vector3();',
@@ -1183,18 +1512,47 @@
         'function moveObject(n,x,y,z){var o=getObject(n);if(o){o.position.x+=x;o.position.y+=y;o.position.z+=z;}}',
         'function setObjectPos(n,x,y,z){var o=getObject(n);if(o){o.position.set(x,y,z);}}',
         'function say(t){var b=document.getElementById("saybox");b.textContent=t;b.style.display="block";clearTimeout(b._h);b._h=setTimeout(function(){b.style.display="none";},2600);}',
-        'function runUserCode(code){try{(new Function("onStart","onUpdate","after","repeat","key","getObject","getSteps","onClick","moveObject","setObjectPos","say","scene","camera",code))(onStart,onUpdate,after,repeat,key,getObject,getSteps,onClick,moveObject,setObjectPos,say,scene,camera);}catch(e){say("Code error: "+e.message);}}',
+        'function runUserCode(code){try{(new Function("onStart","onUpdate","after","repeat","key","getObject","getSteps","onClick","moveObject","setObjectPos","say","playSound","playMusic","stopMusic","scene","camera",code))(onStart,onUpdate,after,repeat,key,getObject,getSteps,onClick,moveObject,setObjectPos,say,playSound,playMusic,stopMusic,scene,camera);}catch(e){say("Code error: "+e.message);}}',
+        'function runObjCode(code,me,dt){try{(new Function("me","dt","after","repeat","key","getObject","getSteps","onClick","moveObject","setObjectPos","say","playSound","playMusic","stopMusic","scene","camera",code))(me,dt,after,repeat,key,getObject,getSteps,onClick,moveObject,setObjectPos,say,playSound,playMusic,stopMusic,scene,camera);}catch(e){say("Code error: "+e.message);}}',
         'var USER_CODE=' + JSON.stringify(gameCode).replace(/<\//g, '<\\/') + ';',
         'var WATCHES=' + watchesJson + ';',
+        'var MENUS=' + JSON.stringify(sceneData.filter(o => o.type === 'menu')).replace(/<\//g, '<\\/') + ';',
+        'if(MENUS.length){var md0=MENUS[0].menu||{title:"My Game",buttons:[]};document.getElementById("menutitle").textContent=md0.title||"My Game";var mb=document.getElementById("menubtns");mb.innerHTML="";(md0.buttons||[]).forEach(function(b){var btn=document.createElement("button");btn.textContent=b.label;btn.style.cssText="display:block;width:min(280px,80vw);margin:0 auto 12px;padding:14px;border-radius:12px;border:1px solid rgba(255,255,255,.25);background:#007acc;color:#fff;font-size:17px;font-weight:700;cursor:pointer;";if(b.action==="code"){btn.onclick=(function(code){return function(){runUserCode(code);};})(b.code||"");}else{btn.onclick=function(){document.getElementById("menuoverlay").style.display="none";var p=renderer.domElement.requestPointerLock();if(p&&p.catch)p.catch(function(){document.getElementById("ui").style.display="flex";});};}mb.appendChild(btn);});document.getElementById("menuoverlay").style.display="flex";}',
         'runUserCode(USER_CODE);',
         '__sc.forEach(function(f){try{f();}catch(e){say("Code error: "+e.message);}});',
+        'objCodeObjs.forEach(function(oc){if(oc.code.onStart)runObjCode(oc.code.onStart,oc.o,0);});',
         'var wasLocked=false;',
         'function openWatch(){wasLocked=locked;var d=new Date();document.getElementById("wtime").textContent=String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");document.getElementById("wtitle").textContent=WATCHES.map(function(w){return (w.watch&&w.watch.title)||"My Watch";}).join(" · ");var c=document.getElementById("wbtns");c.innerHTML="";WATCHES.forEach(function(w){((w.watch&&w.watch.buttons)||[]).forEach(function(b){var btn=document.createElement("button");btn.textContent=b.label;btn.style.cssText="display:block;width:100%;margin:0 0 10px;padding:13px;border-radius:14px;border:1px solid rgba(255,255,255,.12);background:rgba(88,101,242,.9);color:#fff;font-size:15px;font-weight:700;cursor:pointer;";btn.onclick=(function(code){return function(){runUserCode(code);};})(b.code);c.appendChild(btn);});});var wu=document.getElementById("watchui");wu.style.display="flex";if(document.pointerLockElement)document.exitPointerLock();}',
         'function closeWatch(){document.getElementById("watchui").style.display="none";if(wasLocked&&!document.pointerLockElement){var p=renderer.domElement.requestPointerLock();if(p&&p.catch)p.catch(function(){document.getElementById("ui").style.display="flex";});}}',
         'if(WATCHES.length){document.getElementById("watchbtn").style.display="block";document.getElementById("watchbtn").onclick=openWatch;document.getElementById("wclose").onclick=closeWatch;document.addEventListener("keydown",function(e){if(e.code==="Tab"){e.preventDefault();var wu=document.getElementById("watchui");if(wu.style.display==="flex")closeWatch();else openWatch();}});}',
         'var __rc=new THREE.Raycaster(),__cv=new THREE.Vector2(0,0);',
-        'document.addEventListener("mousedown",function(e){if(!locked||e.button!==0)return;__rc.setFromCamera(__cv,camera);var hits=__rc.intersectObjects(clickTargets,true);if(hits.length){var o=hits[0].object;while(o&&!o.userData.clickName)o=o.parent;if(o){var cbs=__clickCbs[o.userData.clickName];if(cbs)cbs.forEach(function(f){try{f();}catch(e){}});}}});',
+        'document.addEventListener("mousedown",function(e){if(!locked||e.button!==0)return;__rc.setFromCamera(__cv,camera);var hits=__rc.intersectObjects(clickTargets,true);if(hits.length){var o=hits[0].object;while(o&&!o.userData.clickName)o=o.parent;if(o){var cbs=__clickCbs[o.userData.clickName];if(cbs)cbs.forEach(function(f){try{f();}catch(e){}});for(var oi=0;oi<objCodeObjs.length;oi++){if(objCodeObjs[oi].name===o.userData.clickName&&objCodeObjs[oi].code.onClick)runObjCode(objCodeObjs[oi].code.onClick,objCodeObjs[oi].o,0);}for(var si=0;si<soundObjs.length;si++){if(soundObjs[si].name===o.userData.clickName&&soundObjs[si].trigger==="onClick")playSound(soundObjs[si].preset);}}}});',
+        '/* ---- Part D: multiplayer in exported games (RTDB engineCollab/rooms) ---- */',
+        'var mpReady=false,mpAuth=null,mpDb=null,mpRoom=false,mpRoomCode="",mpClientId="mp_"+Math.random().toString(36).slice(2,10)+Date.now().toString(36);',
+        'var mpPlayersRef=null,mpMyRef=null,mpAvatars={},mpTimer=null,mpLastSent={x:0,y:0,z:0,yaw:0};',
+        'var MP_COLORS=[0xef4444,0x22c55e,0x3b82f6,0xeab308,0xa855f7,0xec4899,0x14b8a6,0xf97316];',
+        'function mpColorFor(id){var h=0;for(var i=0;i<id.length;i++)h=(h*31+id.charCodeAt(i))>>>0;return MP_COLORS[h%MP_COLORS.length];}',
+        'function mpInitFirebase(){if(typeof firebase==="undefined")return;try{var mc={apiKey:"AIzaSyCT5av2njjksp4XDjuB1RJ3dSX6e-JfXzc",authDomain:"ajg-mail.firebaseapp.com",databaseURL:"https://ajg-mail-default-rtdb.firebaseio.com",projectId:"ajg-mail",storageBucket:"ajg-mail.firebasestorage.app",messagingSenderId:"650156860047",appId:"1:650156860047:web:1a42b3fb2a5af4b04706fa",measurementId:"G-B13TRYF2FL"};var ma;try{ma=firebase.initializeApp(mc);}catch(e){ma=firebase.app();}mpAuth=firebase.auth(ma);var gc={apiKey:"AIzaSyBQtK24KynNd9mytnNfnhg8qnCTqaOvOgc",authDomain:"ajg-games.firebaseapp.com",databaseURL:"https://ajg-games-default-rtdb.firebaseio.com",projectId:"ajg-games",storageBucket:"ajg-games.firebasestorage.app",messagingSenderId:"175496946515",appId:"1:175496946515:web:ec1e9b8bf12431e87477a6"};var ga;try{ga=firebase.initializeApp(gc,"ajg-games");}catch(e){ga=firebase.app("ajg-games");}mpDb=firebase.database(ga);mpReady=true;if(mpAuth&&mpAuth.onAuthStateChanged)mpAuth.onAuthStateChanged(function(u){if(u&&u.email){var ni=document.getElementById("mpname");if(ni&&!ni.value)ni.value=u.email.split("@")[0];}});}catch(e){mpReady=false;mpAuth=null;mpDb=null;}}',
+        'try{mpInitFirebase();}catch(e){mpReady=false;}',
+        'function mpDisplayName(){var ni=document.getElementById("mpname");var typed=ni?ni.value.trim():"";if(typed)return typed.slice(0,20);var u=(mpAuth&&mpAuth.currentUser)?mpAuth.currentUser.email:"";if(u)return u.split("@")[0];return "Player";}',
+        'function mpErr(t){var e=document.getElementById("mperr");if(e)e.textContent=t||"";}',
+        'function openMpPanel(){var p=document.getElementById("mppanel");if(!p)return;mpErr("");if(!mpReady){mpErr("Multiplayer is not available — Firebase failed to load. You can still play single-player.");}var ni=document.getElementById("mpname");if(ni&&!ni.value&&mpAuth&&mpAuth.currentUser&&mpAuth.currentUser.email)ni.value=mpAuth.currentUser.email.split("@")[0];p.style.display="flex";}',
+        'function closeMpPanel(){var p=document.getElementById("mppanel");if(p)p.style.display="none";}',
+        'function mpGenCode(){var letters="ABCDEFGHJKLMNPQRSTUVWXYZ";var c="";for(var i=0;i<6;i++)c+=letters.charAt(Math.floor(Math.random()*letters.length));return c;}',
+        'function mpUpdateHud(){var info=document.getElementById("mpinfo");var code=document.getElementById("mpcode");var cnt=document.getElementById("mpcount");var lv=document.getElementById("mpleave");var jd=document.getElementById("mpjoined");if(!mpRoom){if(info)info.style.display="none";if(lv)lv.style.display="none";if(jd)jd.textContent="";return;}if(info)info.style.display="";if(code)code.textContent=mpRoomCode;if(cnt)cnt.textContent=String(1+Object.keys(mpAvatars).length);if(lv)lv.style.display="block";if(jd)jd.textContent="In room "+mpRoomCode+" — share this code with a friend!";}',
+        'function mpMakeAvatar(id,data){var g=new THREE.Group();var col=mpColorFor(id);var body=new THREE.Mesh(new THREE.BoxGeometry(0.55,0.95,0.32),new THREE.MeshStandardMaterial({color:col,roughness:0.7}));body.position.y=0.85;g.add(body);var head=new THREE.Mesh(new THREE.SphereGeometry(0.3,16,12),new THREE.MeshStandardMaterial({color:0xffdbac,roughness:0.6}));head.position.y=1.62;g.add(head);var cv=document.createElement("canvas");cv.width=256;cv.height=64;var spr=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(cv),transparent:true}));spr.scale.set(2.2,0.55,1);spr.position.y=2.25;g.add(spr);g.userData={nameCv:cv,nameSpr:spr};scene.add(g);mpAvatars[id]={group:g,data:data||{}};mpDrawName(id);return g;}',
+        'function mpDrawName(id){var av=mpAvatars[id];if(!av)return;var cv=av.group.userData.nameCv;var ctx2=cv.getContext("2d");if(!ctx2)return;ctx2.clearRect(0,0,256,64);ctx2.fillStyle="rgba(0,0,0,0.55)";ctx2.fillRect(0,8,256,48);ctx2.fillStyle="#ffffff";ctx2.font="bold 30px sans-serif";ctx2.textAlign="center";ctx2.textBaseline="middle";ctx2.fillText(String((av.data&&av.data.name)||"Player").slice(0,20),128,32);var tex=av.group.userData.nameSpr.material.map;if(tex)tex.needsUpdate=true;}',
+        'function mpUpsertAvatar(id,data){if(id===mpClientId||!data||typeof data.x!=="number"||typeof data.y!=="number"||typeof data.z!=="number")return;var av=mpAvatars[id];if(!av){mpMakeAvatar(id,data);}else{av.data=data;mpDrawName(id);}var g=mpAvatars[id].group;g.position.set(data.x,data.y,data.z);if(typeof data.yaw==="number")g.rotation.y=data.yaw;mpUpdateHud();}',
+        'function mpRemoveAvatar(id){var av=mpAvatars[id];if(!av)return;scene.remove(av.group);delete mpAvatars[id];mpUpdateHud();}',
+        'function mpSendPos(force){if(!mpRoom||!mpMyRef)return;var yv=playerMesh?orbYaw:yaw;if(!force){var dx=pos.x-mpLastSent.x,dy=pos.y-mpLastSent.y,dz=pos.z-mpLastSent.z,dyaw=Math.abs(yv-mpLastSent.yaw);if(dx*dx+dy*dy+dz*dz<0.0025&&dyaw<0.05)return;}mpLastSent={x:pos.x,y:pos.y,z:pos.z,yaw:yv};try{mpMyRef.set({x:Math.round(pos.x*1000)/1000,y:Math.round(pos.y*1000)/1000,z:Math.round(pos.z*1000)/1000,yaw:Math.round(yv*1000)/1000,name:mpDisplayName(),updatedAt:Date.now()});}catch(e){}}',
+        'function mpTick(){if(mpRoom)mpSendPos(false);}',
+        'function mpJoinRoom(code){if(!mpReady||!mpDb){mpErr("Multiplayer is not available — Firebase failed to load.");return false;}code=String(code||"").trim().toUpperCase();if(!/^[A-Z]{6}$/.test(code)){mpErr("Room codes are 6 letters — type the code your friend shared, or press Create room.");return false;}if(mpRoom)mpLeaveRoom(true);mpRoomCode=code;mpRoom=true;mpPlayersRef=mpDb.ref("engineCollab/rooms/"+code+"/players");mpMyRef=mpPlayersRef.child(mpClientId);try{mpMyRef.onDisconnect().remove();}catch(e){}mpPlayersRef.on("child_added",function(s){mpUpsertAvatar(s.key,s.val());});mpPlayersRef.on("child_changed",function(s){mpUpsertAvatar(s.key,s.val());});mpPlayersRef.on("child_removed",function(s){mpRemoveAvatar(s.key);});mpSendPos(true);if(mpTimer)clearInterval(mpTimer);mpTimer=setInterval(function(){mpSendPos(true);},100);mpUpdateHud();mpErr("");return true;}',
+        'function mpLeaveRoom(silent){if(mpTimer){clearInterval(mpTimer);mpTimer=null;}if(mpPlayersRef&&mpPlayersRef.off)mpPlayersRef.off();if(mpMyRef){try{mpMyRef.remove();}catch(e){}mpMyRef=null;}mpPlayersRef=null;mpRoom=false;mpRoomCode="";var ids=Object.keys(mpAvatars);for(var i=0;i<ids.length;i++)mpRemoveAvatar(ids[i]);if(!silent)mpUpdateHud();}',
+        'function mpJoinClicked(){var ci=document.getElementById("mpcodein");mpJoinRoom(ci?ci.value:"");}',
+        'function mpCreateClicked(){var code=mpGenCode();var ci=document.getElementById("mpcodein");if(ci)ci.value=code;mpJoinRoom(code);}',
+        'function mpLeaveClicked(){mpLeaveRoom(false);}',
         '(function tick(){requestAnimationFrame(tick);var dt=Math.min(pclock.getDelta(),0.05);',
+        'gameTime+=dt;mpTick();updateAnims();updateParticles(dt);updateDynamics(dt);updateEnemies(dt);updateSoundCollide(dt);updateObjCollide();',
         'if(locked){',
         'camera.quaternion.setFromEuler(new THREE.Euler(pitch,yaw,0,"YXZ"));',
         'var myaw=playerMesh?orbYaw:yaw;fwd.set(-Math.sin(myaw),0,-Math.cos(myaw));rgt.set(Math.cos(myaw),0,-Math.sin(myaw));',
@@ -1211,6 +1569,7 @@
         '}',
         'for(var ti=__tm.length-1;ti>=0;ti--){__tm[ti].t-=dt;if(__tm[ti].t<=0){var ff=__tm[ti].f;__tm.splice(ti,1);try{ff();}catch(e){}}}',
         'for(var ui=0;ui<__uc.length;ui++){try{__uc[ui](dt);}catch(e){}}',
+        'for(var oi2=0;oi2<objCodeObjs.length;oi2++){if(objCodeObjs[oi2].code.onUpdate)runObjCode(objCodeObjs[oi2].code.onUpdate,objCodeObjs[oi2].o,dt);}',
         'if(lastPX===null){lastPX=pos.x;lastPZ=pos.z;}',
         'var sdx=pos.x-lastPX,sdz=pos.z-lastPZ;lastPX=pos.x;lastPZ=pos.z;stepAcc+=Math.sqrt(sdx*sdx+sdz*sdz);',
         'if(stepAcc>=2){stepCount+=Math.floor(stepAcc/2);stepAcc=stepAcc%2;var sc=document.getElementById("stepcount");if(sc)sc.textContent=stepCount;}',
@@ -1334,6 +1693,7 @@
       gameObjects.push(clone);
       selectObject(clone);
       updateHierarchy();
+      if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
     }
 
     function deleteSelected() {
@@ -1345,6 +1705,7 @@
       selectedObject = null;
       updateHierarchy();
       updateInspector();
+      if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
     }
 
     function setTransformMode(mode) {
@@ -1375,6 +1736,12 @@
         if (obj.userData.primitiveType === 'glb') icon = '🧊';
         if (obj.userData.primitiveType === 'watch') icon = '⌚';
         if (obj.userData.primitiveType === 'pixelart') icon = '🎨';
+        if (obj.userData.primitiveType === 'particle') icon = '✨';
+        if (obj.userData.primitiveType === 'pointlight') icon = '💡';
+        if (obj.userData.primitiveType === 'spotlight') icon = '🔦';
+        if (obj.userData.primitiveType === 'terrain') icon = '⛰';
+        if (obj.userData.primitiveType === 'enemy') icon = '👾';
+        if (obj.userData.primitiveType === 'menu') icon = '📋';
 
         div.innerText = `${icon} ${obj.name}${obj.userData.isPlayer ? ' 🧍' : ''}`;
         div.onclick = () => selectObject(obj);
@@ -1414,8 +1781,9 @@
         ${hasPixel ? '<div style="font-size:11px;color:#888;margin-bottom:6px;">This object has art on it.</div><button class="btn btn-action" style="margin-right:6px;" onclick="editPixelArtForSelected()">✏️ Edit art</button><button class="btn btn-danger" onclick="removePixelArtFromSelected()">Remove</button>' : '<div style="font-size:11px;color:#888;margin-bottom:6px;">No art on this object yet.</div><button class="btn btn-action" onclick="openPixelArt()">🎨 Make art</button>'}
       ` : '';
       const isPlayer = !!(selectedObject.userData && selectedObject.userData.isPlayer);
-      // Watches and spawn points are not playable bodies, so they cannot be the player.
-      const canBePlayer = ['spawnpoint', 'watch'].indexOf(selectedObject.userData.primitiveType) === -1;
+      // Watches, spawn points, lights, particles, terrain, enemies and menus
+      // are not playable bodies, so they cannot be the player.
+      const canBePlayer = ['spawnpoint', 'watch', 'particle', 'pointlight', 'spotlight', 'terrain', 'enemy', 'menu'].indexOf(selectedObject.userData.primitiveType) === -1;
       const playerSection = canBePlayer ? `
         <div class="section-header">🧍 Player</div>
         ${isPlayer ? '<div style="font-size:11px;color:#8b5cf6;margin-bottom:6px;">★ This object is the player. In Preview and downloads, a camera follows it — move the mouse to orbit around it and see the whole avatar.</div><button class="btn btn-danger" onclick="unsetPlayer()">Remove as player</button>' : '<div style="font-size:11px;color:#888;margin-bottom:6px;">Hook this object up as the player. A camera will follow it in Preview and downloads — orbit around it with the mouse.</div><button class="btn btn-action" onclick="setSelectedAsPlayer()">Set as player</button>'}
@@ -1438,6 +1806,162 @@
         <div class="prop-row"><label>Code</label></div>
         <textarea id="newBtnCode" rows="3" placeholder='say("Hello!");' style="width:100%;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:6px;border-radius:2px;font-size:11px;font-family:Consolas,monospace;resize:vertical;"></textarea>
         <button class="btn btn-action" style="margin-top:6px;" onclick="addWatchButton()">+ Add button</button>
+      ` : '';
+
+      // ---- Feature 1: particles ----
+      const isParticle = selectedObject.userData.primitiveType === 'particle';
+      const pCfg = selectedObject.userData.particle || { rate: 10, lifetime: 2, size: 0.2, color: '#ffaa00', spread: 0.5, gravity: -2 };
+      const particleSection = isParticle ? `
+        <div class="section-header">✨ Particles</div>
+        <div class="prop-row"><label>Rate / sec</label>
+          <input type="number" step="1" min="0" value="${pCfg.rate}" onchange="setParticleField('rate', parseFloat(this.value) || 0)" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+        </div>
+        <div class="prop-row"><label>Lifetime (s)</label>
+          <input type="number" step="0.1" min="0.1" value="${pCfg.lifetime}" onchange="setParticleField('lifetime', parseFloat(this.value) || 1)" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+        </div>
+        <div class="prop-row"><label>Size</label>
+          <input type="number" step="0.05" min="0.05" value="${pCfg.size}" onchange="setParticleField('size', parseFloat(this.value) || 0.2)" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+        </div>
+        <div class="prop-row"><label>Color</label>
+          <input type="color" value="${pCfg.color}" oninput="setParticleField('color', this.value)">
+        </div>
+        <div class="prop-row"><label>Spread</label>
+          <input type="number" step="0.1" min="0" value="${pCfg.spread}" onchange="setParticleField('spread', parseFloat(this.value) || 0)" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+        </div>
+        <div class="prop-row"><label>Gravity</label>
+          <input type="number" step="0.5" value="${pCfg.gravity}" onchange="setParticleField('gravity', parseFloat(this.value) || 0)" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+        </div>
+      ` : '';
+      // ---- Feature 2: lights ----
+      const isLight = selectedObject.userData.primitiveType === 'pointlight' || selectedObject.userData.primitiveType === 'spotlight';
+      const isSpot = selectedObject.userData.primitiveType === 'spotlight';
+      const lCfg = selectedObject.userData.light || { color: '#ffffff', intensity: 1, distance: 10, angle: 0.5 };
+      const lightSection = isLight ? `
+        <div class="section-header">💡 Light</div>
+        <div class="prop-row"><label>Color</label>
+          <input type="color" value="${lCfg.color}" oninput="setLightField('color', this.value)">
+        </div>
+        <div class="prop-row"><label>Intensity</label>
+          <input type="number" step="0.1" min="0" value="${lCfg.intensity}" onchange="setLightField('intensity', parseFloat(this.value) || 0)" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+        </div>
+        <div class="prop-row"><label>Distance</label>
+          <input type="number" step="1" min="0" value="${lCfg.distance}" onchange="setLightField('distance', parseFloat(this.value) || 0)" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+        </div>
+        ${isSpot ? `<div class="prop-row"><label>Angle</label>
+          <input type="number" step="0.05" min="0.1" max="1.5" value="${lCfg.angle}" onchange="setLightField('angle', parseFloat(this.value) || 0.5)" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+        </div>` : ''}
+      ` : '';
+      // ---- Feature 3: animation ----
+      const canAnimate = ['spawnpoint', 'watch', 'menu', 'terrain'].indexOf(selectedObject.userData.primitiveType) === -1;
+      const anim = selectedObject.userData.anim || { loop: true, keyframes: [] };
+      const animSection = canAnimate ? `
+        <div class="section-header">🎬 Animation</div>
+        <div class="prop-row"><label>Loop</label>
+          <input type="checkbox" ${anim.loop ? 'checked' : ''} onchange="toggleAnimLoop(this.checked)">
+        </div>
+        <div id="animKeyList">${anim.keyframes.length ? anim.keyframes.map((k, i) => `
+          <div class="prop-row"><label>Key ${i + 1} @</label>
+            <input type="number" step="0.1" min="0" value="${k.t}" onchange="setAnimTime(${i}, parseFloat(this.value) || 0)" style="width:60px;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+            <span style="font-size:11px;color:#888;">s</span>
+            <button class="btn btn-danger" onclick="delAnimKeyframe(${i})">✕</button>
+          </div>`).join('') : '<div style="font-size:11px;color:#666;margin-bottom:6px;">No keyframes yet — add one below.</div>'}
+        </div>
+        <button class="btn btn-action" style="margin-top:6px;" onclick="addAnimKeyframe()">+ Add keyframe at current transform</button>
+      ` : '';
+      // ---- Feature 4: terrain brush ----
+      const isTerrain = selectedObject.userData.primitiveType === 'terrain';
+      const terrainSection = isTerrain ? `
+        <div class="section-header">⛰ Terrain Brush</div>
+        <div style="font-size:11px;color:#888;margin-bottom:6px;">Click-drag on the terrain in the viewport to sculpt it.</div>
+        <div class="prop-row"><label>Brush size</label>
+          <input type="number" step="0.5" min="0.5" value="${terrainBrush.size}" onchange="terrainBrush.size = parseFloat(this.value) || 1" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+        </div>
+        <div class="prop-row"><label>Strength</label>
+          <input type="number" step="0.1" min="0.05" value="${terrainBrush.strength}" onchange="terrainBrush.strength = parseFloat(this.value) || 0.3" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+        </div>
+        <div class="prop-row"><label>Mode</label>
+          <select onchange="terrainBrush.mode = this.value" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+            <option value="raise" ${terrainBrush.mode === 'raise' ? 'selected' : ''}>Raise</option>
+            <option value="lower" ${terrainBrush.mode === 'lower' ? 'selected' : ''}>Lower</option>
+          </select>
+        </div>
+      ` : '';
+      // ---- Feature 6: enemy ----
+      const isEnemy = selectedObject.userData.primitiveType === 'enemy';
+      const eCfg = selectedObject.userData.enemy || { speed: 2 };
+      const enemySection = isEnemy ? `
+        <div class="section-header">👾 Enemy</div>
+        <div class="prop-row"><label>Chase speed</label>
+          <input type="number" step="0.5" min="0" value="${eCfg.speed}" onchange="setEnemySpeed(parseFloat(this.value) || 0)" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+        </div>
+        <div style="font-size:11px;color:#888;">Chases the player in Preview &amp; downloads. Touching the player costs 10 HP.</div>
+      ` : '';
+      // ---- Feature 8: menu ----
+      const isMenu = selectedObject.userData.primitiveType === 'menu';
+      const md = selectedObject.userData.menu || { title: 'My Game', buttons: [] };
+      const menuSection = isMenu ? `
+        <div class="section-header">📋 Menu (title screen)</div>
+        <div class="prop-row"><label>Title</label>
+          <input type="text" value="${esc(md.title)}" onchange="setMenuTitle(this.value)" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+        </div>
+        <div id="menuBtnList">${md.buttons.length ? md.buttons.map((b, i) => `
+          <div class="prop-row"><label style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(b.label)} (${esc(b.action === 'code' ? 'Run code' : 'Start game')})</label>
+            <button class="btn btn-danger" onclick="delMenuButton(${i})">✕</button>
+          </div>`).join('') : '<div style="font-size:11px;color:#666;margin-bottom:6px;">No buttons yet — add one below.</div>'}
+        </div>
+        <div class="prop-row"><label>Label</label>
+          <input type="text" id="newMenuBtnLabel" placeholder="Button text" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+        </div>
+        <div class="prop-row"><label>Action</label>
+          <select id="newMenuBtnAction" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+            <option value="start">Start game</option>
+            <option value="code">Run code</option>
+          </select>
+        </div>
+        <div class="prop-row"><label>Code</label></div>
+        <textarea id="newMenuBtnCode" rows="3" placeholder='say("Hello!");' style="width:100%;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:6px;border-radius:2px;font-size:11px;font-family:Consolas,monospace;resize:vertical;"></textarea>
+        <button class="btn btn-action" style="margin-top:6px;" onclick="addMenuButton()">+ Add button</button>
+      ` : '';
+      // ---- Per-object code (any object) ----
+      const oc = selectedObject.userData.objCode || {};
+      const codeSection = `
+        <div class="section-header">💻 Code</div>
+        <div style="font-size:11px;color:#888;margin-bottom:6px;">Code for this object only. <span style="color:#d4d4d4">me</span> is this object. Runs in Preview &amp; downloads.</div>
+        ${['onStart', 'onUpdate', 'onClick', 'onCollide'].map(ev => `
+          <div class="prop-row"><label>${ev}</label>
+            <span style="font-size:11px;color:${oc[ev] ? '#4ec9b0' : '#666'};flex:1;">${oc[ev] ? '✓ has code' : '—'}</span>
+            <button class="btn btn-action" onclick="openObjCode('${ev}')">Edit</button>
+          </div>`).join('')}
+      `;
+      // ---- Feature 5: sound (any object) ----
+      const sCfg = selectedObject.userData.sound || { preset: 'coin', trigger: 'onClick' };
+      const soundSection = `
+        <div class="section-header">🔊 Sound</div>
+        <div class="prop-row"><label>Preset</label>
+          <select onchange="setSoundField('preset', this.value)" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+            ${['jump', 'coin', 'explosion', 'click'].map(p => `<option value="${p}" ${sCfg.preset === p ? 'selected' : ''}>${p}</option>`).join('')}
+          </select>
+        </div>
+        <div class="prop-row"><label>Trigger</label>
+          <select onchange="setSoundField('trigger', this.value)" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+            <option value="onClick" ${sCfg.trigger === 'onClick' ? 'selected' : ''}>When clicked</option>
+            <option value="onCollide" ${sCfg.trigger === 'onCollide' ? 'selected' : ''}>When player touches it</option>
+          </select>
+        </div>
+        <div style="font-size:11px;color:#888;">Plays in Preview &amp; downloads. Use playSound("coin") in code too.</div>
+      `;
+      // ---- Feature 7: real physics (dynamic) ----
+      const canBeDynamic = ['cube', 'sphere', 'glb', 'pixelart', 'enemy'].indexOf(selectedObject.userData.primitiveType) !== -1;
+      const dyn = selectedObject.userData.dynamic || null;
+      const dynamicSection = canBeDynamic ? `
+        <div class="section-header">⚙️ Physics</div>
+        <div class="prop-row"><label>Dynamic</label>
+          <input type="checkbox" ${dyn ? 'checked' : ''} onchange="toggleDynamic(this.checked)">
+        </div>
+        ${dyn ? `<div class="prop-row"><label>Bounciness</label>
+          <input type="number" step="0.05" min="0" max="1" value="${dyn.restitution}" onchange="setRestitution(parseFloat(this.value) || 0)" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+        </div>
+        <div style="font-size:11px;color:#888;">Falls with gravity in Preview &amp; downloads, lands on the ground and blocks, and bounces.</div>` : '<div style="font-size:11px;color:#888;">Tick Dynamic to make this object fall, land and bounce in Preview &amp; downloads.</div>'}
       ` : '';
 
       panel.innerHTML = `
@@ -1471,6 +1995,15 @@
         </div>
 
         ${matSection}
+        ${particleSection}
+        ${lightSection}
+        ${animSection}
+        ${terrainSection}
+        ${enemySection}
+        ${menuSection}
+        ${codeSection}
+        ${soundSection}
+        ${dynamicSection}
         ${playerSection}
         ${pixelSection}
         ${watchSection}
@@ -1499,8 +2032,122 @@
       }
     }
 
+    /* ============ FEATURES 1-8: INSPECTOR HANDLERS ============ */
+    function setParticleField(field, value) {
+      if (!selectedObject || !selectedObject.userData.particle) return;
+      selectedObject.userData.particle[field] = value;
+      if (field === 'color') {
+        selectedObject.children.forEach(function(c) {
+          if (c.material && c.material.color) c.material.color.set(value);
+          if (c.material && c.material.emissive) c.material.emissive.set(value);
+        });
+      }
+      if (field === 'size') {
+        selectedObject.children.forEach(function(c) {
+          if (c.isPoints && c.material) c.material.size = value;
+        });
+      }
+    }
+    function setLightField(field, value) {
+      if (!selectedObject || !selectedObject.userData.light) return;
+      selectedObject.userData.light[field] = value;
+      selectedObject.children.forEach(function(c) {
+        if (c.isPointLight || c.isSpotLight) {
+          if (field === 'color') c.color.set(value);
+          if (field === 'intensity') c.intensity = value;
+          if (field === 'distance') c.distance = value;
+          if (field === 'angle' && c.isSpotLight) c.angle = value;
+        }
+        if (field === 'color' && c.material && c.material.emissive) c.material.emissive.set(value);
+        if (field === 'color' && c.material && c.material.color) c.material.color.set(value);
+      });
+    }
+    function addAnimKeyframe() {
+      if (!selectedObject) return;
+      if (!selectedObject.userData.anim) selectedObject.userData.anim = { loop: true, keyframes: [] };
+      const kf = selectedObject.userData.anim.keyframes;
+      const t = kf.length ? kf[kf.length - 1].t + 1 : 0;
+      kf.push({
+        t: t,
+        pos: selectedObject.position.toArray(),
+        rot: [selectedObject.rotation.x, selectedObject.rotation.y, selectedObject.rotation.z],
+        scale: selectedObject.scale.toArray()
+      });
+      updateInspector();
+    }
+    function delAnimKeyframe(i) {
+      if (selectedObject && selectedObject.userData.anim) {
+        selectedObject.userData.anim.keyframes.splice(i, 1);
+        updateInspector();
+      }
+    }
+    function setAnimTime(i, v) {
+      if (selectedObject && selectedObject.userData.anim && selectedObject.userData.anim.keyframes[i]) {
+        selectedObject.userData.anim.keyframes[i].t = Math.max(0, v);
+      }
+    }
+    function toggleAnimLoop(on) {
+      if (!selectedObject) return;
+      if (!selectedObject.userData.anim) selectedObject.userData.anim = { loop: true, keyframes: [] };
+      selectedObject.userData.anim.loop = !!on;
+    }
+    function setEnemySpeed(v) {
+      if (selectedObject && selectedObject.userData.enemy) selectedObject.userData.enemy.speed = v;
+    }
+    function setMenuTitle(v) {
+      if (selectedObject && selectedObject.userData.menu) selectedObject.userData.menu.title = v;
+    }
+    function addMenuButton() {
+      if (!selectedObject || !selectedObject.userData.menu) return;
+      const l = document.getElementById('newMenuBtnLabel');
+      const a = document.getElementById('newMenuBtnAction');
+      const c = document.getElementById('newMenuBtnCode');
+      selectedObject.userData.menu.buttons.push({
+        label: ((l && l.value) || 'Button').trim() || 'Button',
+        action: (a && a.value) || 'start',
+        code: (c && c.value) || ''
+      });
+      updateInspector();
+    }
+    function delMenuButton(i) {
+      if (selectedObject && selectedObject.userData.menu) {
+        selectedObject.userData.menu.buttons.splice(i, 1);
+        updateInspector();
+      }
+    }
+    function setSoundField(field, value) {
+      if (!selectedObject) return;
+      if (!selectedObject.userData.sound) selectedObject.userData.sound = { preset: 'coin', trigger: 'onClick' };
+      selectedObject.userData.sound[field] = value;
+    }
+    function toggleDynamic(on) {
+      if (!selectedObject) return;
+      if (on) selectedObject.userData.dynamic = { vel: [0, 0, 0], restitution: 0.5 };
+      else delete selectedObject.userData.dynamic;
+      updateInspector();
+    }
+    function setRestitution(v) {
+      if (selectedObject && selectedObject.userData.dynamic) {
+        selectedObject.userData.dynamic.restitution = Math.max(0, Math.min(1, v));
+      }
+    }
+
     function updateSelectedColor(colorHex) {
       if (!selectedObject) return;
+      // Lights: the material color picker also recolors the real light.
+      if (selectedObject.userData.light) {
+        selectedObject.userData.light.color = colorHex;
+        selectedObject.children.forEach(function(c) {
+          if ((c.isPointLight || c.isSpotLight) && c.color) c.color.set(colorHex);
+        });
+      }
+      // Particles: recolor the emitter marker and the preview points.
+      if (selectedObject.userData.particle) {
+        selectedObject.userData.particle.color = colorHex;
+        selectedObject.children.forEach(function(c) {
+          if (c.material && c.material.color) c.material.color.set(colorHex);
+        });
+      }
       if (Array.isArray(selectedObject.material)) {
         // Painted cube: recolor the plain faces only, so the art stays true.
         selectedObject.userData.pixelArtBaseColor = colorHex;
@@ -1551,6 +2198,7 @@
         parseFloat(document.getElementById('sclY').value) || 1,
         parseFloat(document.getElementById('sclZ').value) || 1
       );
+      if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
     }
 
     // Main Loop
@@ -1564,6 +2212,334 @@
       camera.updateProjectionMatrix();
       renderer.setSize(container.clientWidth, container.clientHeight);
     });
+
+    /* ============================================================
+       PART B — AJG MAIL LOGIN + PART C — COLLAB REQUESTS
+       Auth: Firebase Auth on the ajg-mail project (same project and
+       config as AJG Mail). Session persists across reloads via
+       Firebase Auth's default local persistence.
+       Collab data: Firebase Realtime Database on the ajg-games
+       project (second Firebase app), under NEW nodes only:
+         engineCollab/requests/<pushId>  -> collab request record
+         engineCollab/sessions/<projectId>/scene -> live scene snapshot
+       The existing games/library/whitelist nodes are never touched.
+       Live collab is editor-only; the exported game has no collab.
+       NOTE: the ajg-mail API key's HTTP referrer allow-list must
+       include the engine's live origin
+       (ajg-engine.foxcorpgames.workers.dev) or sign-in will fail
+       there. Login from a local file:// copy may also be blocked.
+       ============================================================ */
+    var fbAuth = null;      // firebase.auth() on the ajg-mail project
+    var fbGamesDb = null;   // firebase.database() on the ajg-games project
+    var currentUser = null; // { uid, email } when signed in, else null
+
+    // Project identity: one id per editor load (or per accepted request).
+    var currentProjectId = 'proj_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    var currentProjectName = 'My Project';
+
+    // Live collab session state. Null when not in a session.
+    var collabSession = null;        // { projectId, partnerEmail }
+    var collabSessionRef = null;     // RTDB ref for the session scene listener
+    var collabRequestsQuery = null;  // RTDB query for incoming requests
+    var collabIncoming = [];         // pending requests addressed to me
+    var collabRequestsById = {};     // pushId -> request record
+    var collabPushTimer = null;
+    var applyingRemoteScene = false; // true while a remote scene is being applied (stops echo loops)
+
+    function escHtml(s) {
+      return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function initAjgFirebase() {
+      if (typeof firebase === 'undefined') {
+        var ae = document.getElementById('authError');
+        if (ae) ae.textContent = 'Firebase failed to load — check your connection and reload.';
+        return;
+      }
+      try {
+        // --- ajg-mail project: accounts + sign-in (default app) ---
+        var mailConfig = {
+          apiKey: "AIzaSyCT5av2njjksp4XDjuB1RJ3dSX6e-JfXzc",
+          authDomain: "ajg-mail.firebaseapp.com",
+          databaseURL: "https://ajg-mail-default-rtdb.firebaseio.com",
+          projectId: "ajg-mail",
+          storageBucket: "ajg-mail.firebasestorage.app",
+          messagingSenderId: "650156860047",
+          appId: "1:650156860047:web:1a42b3fb2a5af4b04706fa",
+          measurementId: "G-B13TRYF2FL"
+        };
+        var mailApp;
+        try { mailApp = firebase.initializeApp(mailConfig); }
+        catch (e) { mailApp = firebase.app(); }
+        fbAuth = firebase.auth(mailApp);
+
+        // --- ajg-games project: collab data only (second app) ---
+        var gamesConfig = {
+          apiKey: "AIzaSyBQtK24KynNd9mytnNfnhg8qnCTqaOvOgc",
+          authDomain: "ajg-games.firebaseapp.com",
+          databaseURL: "https://ajg-games-default-rtdb.firebaseio.com",
+          projectId: "ajg-games",
+          storageBucket: "ajg-games.firebasestorage.app",
+          messagingSenderId: "175496946515",
+          appId: "1:175496946515:web:ec1e9b8bf12431e87477a6"
+        };
+        var gamesApp;
+        try { gamesApp = firebase.initializeApp(gamesConfig, "ajg-games"); }
+        catch (e) { gamesApp = firebase.app("ajg-games"); }
+        fbGamesDb = firebase.database(gamesApp);
+
+        fbAuth.onAuthStateChanged(function (user) {
+          if (user) {
+            currentUser = { uid: user.uid, email: user.email || '' };
+          } else {
+            currentUser = null;
+          }
+          updateAuthUI();
+        });
+
+        // Code edits are edits too — sync them while in a session.
+        var ce = document.getElementById('codeEditor');
+        if (ce && ce.addEventListener) ce.addEventListener('input', function () { scheduleCollabPush(); });
+      } catch (e) {
+        fbAuth = null;
+        fbGamesDb = null;
+        var ae2 = document.getElementById('authError');
+        if (ae2) ae2.textContent = 'Firebase failed to start — check your connection and reload.';
+      }
+    }
+
+    function updateAuthUI() {
+      var signedOut = document.getElementById('authSignedOut');
+      var signedIn = document.getElementById('authSignedIn');
+      var emailEl = document.getElementById('authUserEmail');
+      var errEl = document.getElementById('authError');
+      var collabBtn = document.getElementById('collabBtn');
+      if (currentUser) {
+        if (signedOut) signedOut.style.display = 'none';
+        if (signedIn) signedIn.style.display = 'flex';
+        if (emailEl) emailEl.textContent = currentUser.email;
+        if (errEl) errEl.textContent = '';
+        var pw = document.getElementById('authPassword');
+        if (pw) pw.value = '';
+        if (collabBtn) collabBtn.style.display = '';
+        startIncomingRequestsListener();
+      } else {
+        if (signedOut) signedOut.style.display = 'flex';
+        if (signedIn) signedIn.style.display = 'none';
+        if (collabBtn) collabBtn.style.display = 'none';
+        closeCollabPanel();
+        leaveCollabSession();
+        stopIncomingRequestsListener();
+        collabIncoming = [];
+        collabRequestsById = {};
+        renderCollabRequests();
+      }
+    }
+
+    function signInToAjgMail() {
+      var errEl = document.getElementById('authError');
+      if (!fbAuth) {
+        if (errEl) errEl.textContent = 'Firebase is not ready yet — reload and try again.';
+        return;
+      }
+      var email = (document.getElementById('authEmail').value || '').trim();
+      var password = document.getElementById('authPassword').value || '';
+      if (!email || !password) {
+        if (errEl) errEl.textContent = 'incorrect email or password';
+        return;
+      }
+      if (errEl) errEl.textContent = '';
+      fbAuth.signInWithEmailAndPassword(email, password).catch(function (err) {
+        var code = (err && err.code) || '';
+        // Wrong credentials (bad password, bad address, or no such
+        // account) all show exactly this string.
+        if (code === 'auth/wrong-password' || code === 'auth/invalid-credential' || code === 'auth/user-not-found') {
+          if (errEl) errEl.textContent = 'incorrect email or password';
+        } else if (errEl) {
+          errEl.textContent = (err && err.message) ? err.message : 'incorrect email or password';
+        }
+      });
+    }
+
+    function signOutOfAjgMail() {
+      if (!fbAuth) return;
+      fbAuth.signOut();
+    }
+
+    /* ---------------- Collab Requests panel ---------------- */
+    function openCollabPanel() {
+      if (!currentUser) return;
+      var nameInput = document.getElementById('collabProjectName');
+      if (nameInput) nameInput.value = currentProjectName;
+      var cur = document.getElementById('collabCurrentProject');
+      if (cur) cur.textContent = currentProjectName;
+      renderCollabRequests();
+      var ov = document.getElementById('collab-modal-overlay');
+      if (ov) ov.style.display = 'flex';
+    }
+    function closeCollabPanel() {
+      var ov = document.getElementById('collab-modal-overlay');
+      if (ov) ov.style.display = 'none';
+    }
+
+    function startIncomingRequestsListener() {
+      if (!fbGamesDb || !currentUser || collabRequestsQuery) return;
+      collabRequestsQuery = fbGamesDb.ref('engineCollab/requests').orderByChild('toAddress').equalTo(currentUser.email);
+      collabRequestsQuery.on('value', function (snap) {
+        var all = snap.val() || {};
+        collabIncoming = [];
+        collabRequestsById = {};
+        Object.keys(all).forEach(function (id) {
+          var r = all[id];
+          if (r && r.status === 'pending') {
+            r._id = id;
+            collabIncoming.push(r);
+            collabRequestsById[id] = r;
+          }
+        });
+        renderCollabRequests();
+      });
+    }
+    function stopIncomingRequestsListener() {
+      if (collabRequestsQuery && collabRequestsQuery.off) collabRequestsQuery.off();
+      collabRequestsQuery = null;
+    }
+
+    function renderCollabRequests() {
+      var list = document.getElementById('collabRequestsList');
+      if (!list) return;
+      var badge = document.getElementById('collabBadge');
+      if (!collabIncoming.length) {
+        list.innerHTML = 'No requests yet.';
+        if (badge) badge.style.display = 'none';
+        return;
+      }
+      if (badge) {
+        badge.style.display = '';
+        badge.textContent = String(collabIncoming.length);
+      }
+      list.innerHTML = collabIncoming.map(function (r) {
+        return '<div style="border:1px solid #3c3c3c;border-radius:6px;padding:8px;margin-bottom:8px;">'
+          + '<div><b>' + escHtml(r.fromAddress) + '</b> invited you to <b>' + escHtml(r.projectName || 'a project') + '</b></div>'
+          + '<div style="margin-top:6px;display:flex;gap:6px;">'
+          + '<button class="btn btn-action" onclick="acceptCollabRequest(\'' + r._id + '\')">✔ Accept</button>'
+          + '<button class="btn btn-danger" onclick="declineCollabRequest(\'' + r._id + '\')">✕ Decline</button>'
+          + '</div></div>';
+      }).join('');
+    }
+
+    function sendCollabRequest() {
+      var msg = document.getElementById('collabSendMsg');
+      if (!fbGamesDb || !currentUser) {
+        if (msg) msg.textContent = 'Sign in first.';
+        return;
+      }
+      var toAddress = (document.getElementById('collabFriendEmail').value || '').trim().toLowerCase();
+      if (!toAddress || toAddress.indexOf('@') === -1) {
+        if (msg) { msg.style.color = '#ef4444'; msg.textContent = 'Enter a valid AJG Mail address.'; }
+        return;
+      }
+      if (toAddress === (currentUser.email || '').toLowerCase()) {
+        if (msg) { msg.style.color = '#ef4444'; msg.textContent = 'That is your own address.'; }
+        return;
+      }
+      var nameInput = document.getElementById('collabProjectName');
+      currentProjectName = ((nameInput && nameInput.value) || currentProjectName || 'My Project').trim() || 'My Project';
+      var cur = document.getElementById('collabCurrentProject');
+      if (cur) cur.textContent = currentProjectName;
+      var record = {
+        fromUid: currentUser.uid,
+        fromAddress: currentUser.email,
+        toAddress: toAddress,
+        projectId: currentProjectId,
+        projectName: currentProjectName,
+        snapshot: { objects: serializeScene(), code: gameCode },
+        status: 'pending',
+        createdAt: Date.now()
+      };
+      fbGamesDb.ref('engineCollab/requests').push(record);
+      if (msg) { msg.style.color = '#4ec9b0'; msg.textContent = 'Request sent to ' + toAddress + '.'; }
+      var fe = document.getElementById('collabFriendEmail');
+      if (fe) fe.value = '';
+    }
+
+    function acceptCollabRequest(id) {
+      var req = collabRequestsById[id];
+      if (!req || !fbGamesDb) return;
+      fbGamesDb.ref('engineCollab/requests/' + id).update({ status: 'accepted' });
+      // Load their project snapshot into the editor.
+      currentProjectId = req.projectId || currentProjectId;
+      currentProjectName = req.projectName || currentProjectName;
+      var snap = req.snapshot || {};
+      gameCode = snap.code || '';
+      var ce = document.getElementById('codeEditor');
+      if (ce) ce.value = gameCode;
+      applyingRemoteScene = true;
+      try { deserializeScene(snap.objects || []); } finally { applyingRemoteScene = false; }
+      closeCollabPanel();
+      startCollabSession(currentProjectId, req.fromAddress);
+    }
+
+    function declineCollabRequest(id) {
+      if (!fbGamesDb) return;
+      fbGamesDb.ref('engineCollab/requests/' + id).update({ status: 'declined' });
+    }
+
+    /* ---------------- Live collab session ---------------- */
+    function startCollabSession(projectId, partnerEmail) {
+      if (!fbGamesDb || !currentUser) return;
+      leaveCollabSession();
+      collabSession = { projectId: projectId, partnerEmail: partnerEmail || '' };
+      var bar = document.getElementById('collabSessionBar');
+      if (bar) bar.style.display = 'flex';
+      var txt = document.getElementById('collabSessionText');
+      if (txt) txt.textContent = '🔴 Live collab with ' + (partnerEmail || 'a friend');
+      collabSessionRef = fbGamesDb.ref('engineCollab/sessions/' + projectId + '/scene');
+      collabSessionRef.on('value', function (snap) {
+        var v = snap.val();
+        if (!v || !collabSession || collabSession.projectId !== projectId) return;
+        if (v.byUid === currentUser.uid) return; // ignore my own writes
+        // Remote edit from the other person — apply their whole scene.
+        gameCode = v.code || '';
+        var ce = document.getElementById('codeEditor');
+        if (ce) ce.value = gameCode;
+        applyingRemoteScene = true;
+        try { deserializeScene(v.objects || []); } finally { applyingRemoteScene = false; }
+      });
+      // Push the scene I have open so the other side starts in sync.
+      pushCollabScene();
+    }
+
+    function leaveCollabSession() {
+      if (collabSessionRef && collabSessionRef.off) collabSessionRef.off();
+      collabSessionRef = null;
+      collabSession = null;
+      if (collabPushTimer) { clearTimeout(collabPushTimer); collabPushTimer = null; }
+      var bar = document.getElementById('collabSessionBar');
+      if (bar) bar.style.display = 'none';
+    }
+
+    // Debounced (~500ms) local-edit push: whole-scene snapshot.
+    function scheduleCollabPush() {
+      if (!collabSession || !currentUser || applyingRemoteScene) return;
+      if (collabPushTimer) clearTimeout(collabPushTimer);
+      collabPushTimer = setTimeout(pushCollabScene, 500);
+    }
+
+    function pushCollabScene() {
+      if (!collabSession || !currentUser || !fbGamesDb) return;
+      collabPushTimer = null;
+      fbGamesDb.ref('engineCollab/sessions/' + collabSession.projectId + '/scene').set({
+        objects: serializeScene(),
+        code: gameCode,
+        byUid: currentUser.uid,
+        byAddress: currentUser.email,
+        updatedAt: Date.now()
+      });
+    }
+
+    // Start Firebase (guarded: the editor still works if it fails).
+    try { initAjgFirebase(); } catch (e) { fbAuth = null; fbGamesDb = null; }
   </script>
 </body>
 </html>
