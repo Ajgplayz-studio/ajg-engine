@@ -2398,6 +2398,9 @@
           }
         });
         renderCollabRequests();
+      }, function (err) {
+        var list2 = document.getElementById('collabRequestsList');
+        if (list2) list2.innerHTML = 'Couldn\'t load requests: ' + escHtml((err && err.message) || 'denied');
       });
     }
     function stopIncomingRequestsListener() {
@@ -2457,10 +2460,15 @@
         status: 'pending',
         createdAt: Date.now()
       };
-      fbGamesDb.ref('engineCollab/requests').push(record);
+      var sentRef = fbGamesDb.ref('engineCollab/requests').push(record);
       if (msg) { msg.style.color = '#4ec9b0'; msg.textContent = 'Request sent to ' + toAddress + '.'; }
       var fe = document.getElementById('collabFriendEmail');
       if (fe) fe.value = '';
+      if (sentRef && sentRef.catch) {
+        sentRef.catch(function (err) {
+          if (msg) { msg.style.color = '#ef4444'; msg.textContent = 'Request failed to send: ' + ((err && err.message) || 'denied'); }
+        });
+      }
     }
 
     function acceptCollabRequest(id) {

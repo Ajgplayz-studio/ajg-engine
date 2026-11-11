@@ -1,9 +1,11 @@
 {
-  "//": "DRAFT — NOT YET PUBLISHED. These rules are ONLY for the new engineCollab nodes used by AJG Engine Part C (Collab Requests + live sessions) and Part D (multiplayer rooms in exported games). They must be MERGED into the existing ajg-games Realtime Database rules (which already cover games/library/whitelist) — do NOT replace the whole ruleset with this file. Publish in the Firebase Console, project ajg-games, as averygroshans.",
+  "//": "Rules for the new engineCollab nodes used by AJG Engine Part C (Collab Requests + live sessions) and Part D (multiplayer rooms in exported games). They must be MERGED into the existing ajg-games Realtime Database rules (which already cover games/library/whitelist) — do NOT replace the whole ruleset with this file. Publish in the Firebase Console, project ajg-games, as averygroshans. FIX 2026-11-10: the requests list and the multiplayer player list read at the PARENT path (requests / rooms/<code>/players), so those parents need their own .read — a .read only on $id does NOT let a query or child_added listener see anything, which is why sent requests showed 'No requests yet.' requests also needs .indexOn toAddress for the orderByChild query.",
   "//note": "Follows the same public-read + shape-checked-write pattern as the existing ajg-games rules.json. Auth is NOT enforced here because the engine signs in to the ajg-mail project, not the ajg-games project, so the games database cannot verify who is writing (same honest limit as the existing games/library/whitelist rules).",
   "rules": {
     "engineCollab": {
       "requests": {
+        ".read": true,
+        ".indexOn": ["toAddress"],
         "$id": {
           ".read": true,
           ".write": "newData.exists() && newData.child('fromUid').isString() && newData.child('fromUid').val().length > 0 && newData.child('fromAddress').isString() && newData.child('fromAddress').val().length > 0 && newData.child('toAddress').isString() && newData.child('toAddress').val().length > 0 && newData.child('projectId').isString() && newData.child('projectId').val().length > 0 && newData.child('projectName').isString() && (newData.child('status').val() === 'pending' || newData.child('status').val() === 'accepted' || newData.child('status').val() === 'declined') && newData.child('createdAt').isNumber()"
@@ -20,6 +22,7 @@
       "rooms": {
         "$code": {
           "players": {
+            ".read": true,
             "$id": {
               ".read": true,
               ".write": "newData.exists() && newData.child(\"name\").isString() && newData.child(\"name\").val().length > 0 && newData.child(\"x\").isNumber() && newData.child(\"y\").isNumber() && newData.child(\"z\").isNumber() && newData.child(\"yaw\").isNumber() && newData.child(\"updatedAt\").isNumber()"
