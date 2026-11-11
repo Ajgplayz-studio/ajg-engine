@@ -598,6 +598,7 @@
       mesh.userData.primitiveType = typeName;
       mesh.userData.isGrabbable = customData ? !!customData.isGrabbable : false;
       mesh.userData.isPlayer = customData ? !!customData.isPlayer : false;
+      mesh.userData.camHeight = (customData && customData.camHeight !== undefined) ? customData.camHeight : 0;
       // In-game grab & throw (Preview / downloads): cubes, spheres, glbs and
       // pixelart can be grabbed by default; everything else (ground, terrain,
       // spawn, watch, menu, enemy, lights, particles) cannot. Saved per
@@ -669,6 +670,7 @@
         if (item.type === 'watch' && obj.userData.watchData) item.watch = obj.userData.watchData;
         if (obj.userData.pixelArt) item.pixelArt = obj.userData.pixelArt;
         if (obj.userData.isPlayer) item.isPlayer = true;
+        if (obj.userData.camHeight) item.camHeight = obj.userData.camHeight;
         if (obj.userData.particle) item.particle = JSON.parse(JSON.stringify(obj.userData.particle));
         if (obj.userData.light) item.light = JSON.parse(JSON.stringify(obj.userData.light));
         if (obj.userData.terrain) item.terrain = { size: obj.userData.terrain.size, segments: obj.userData.terrain.segments, heights: obj.userData.terrain.heights.slice() };
@@ -699,6 +701,7 @@
         if (item.type === 'glb' && item.glbData) addGLBFromData(item);
         else addPrimitive(item.type, item);
       });
+      refreshPlayerCamIcon();
       updateHierarchy();
       updateInspector();
     }
@@ -1343,6 +1346,7 @@
           model.userData.primitiveType = 'glb';
           model.userData.isGrabbable = !!item.isGrabbable;
           model.userData.isPlayer = !!item.isPlayer;
+          model.userData.camHeight = (item.camHeight !== undefined) ? item.camHeight : 0;
           model.userData.canGrab = (item.canGrab !== undefined) ? !!item.canGrab : true;
           model.userData.glbData = item.glbData;
           if (item.code) model.userData.objCode = JSON.parse(JSON.stringify(item.code));
@@ -1352,6 +1356,7 @@
           model.traverse(function(n){ if (n.isMesh) n.castShadow = true; });
           scene.add(model);
           gameObjects.push(model);
+          refreshPlayerCamIcon();
           updateHierarchy();
         }, function() {
           showEnginePopup('A .glb model in the scene file could not be loaded.');
@@ -1479,7 +1484,7 @@
         'function pixelTex(pa){var c=document.createElement("canvas");var g=c.getContext("2d");var t=new THREE.CanvasTexture(c);t.magFilter=THREE.NearestFilter;t.minFilter=THREE.NearestFilter;t.generateMipmaps=false;if(pa.image){var im=new Image();im.onload=function(){c.width=im.naturalWidth;c.height=im.naturalHeight;g.drawImage(im,0,0);t.needsUpdate=true;};im.src=pa.image;c.width=1;c.height=1;}else{c.width=pa.size;c.height=pa.size;for(var y=0;y<pa.size;y++)for(var x=0;x<pa.size;x++){var col=pa.pixels[y*pa.size+x];if(col){g.fillStyle=col;g.fillRect(x,y,1,1);}}}return t;}',
         'var spawnPt=null;',
         'function regBox(o){var b=new THREE.Box3().setFromObject(o);solids.push({o:o,x0:b.min.x,x1:b.max.x,y0:b.min.y,y1:b.max.y,z0:b.min.z,z1:b.max.z});}',
-        'var playerMesh=null,playerFootOff=0.9,playerHalfD=0.3,playerEye=1.6;',
+        'var playerMesh=null,playerFootOff=0.9,playerHalfD=0.3,playerEye=1.6,camHeight=0;',
         'function setPlayerDims(o){var b=new THREE.Box3().setFromObject(o);var s=new THREE.Vector3();b.getSize(s);playerFootOff=o.position.y-b.min.y;playerHalfD=Math.max(s.x,s.z)/2;playerEye=Math.max(0.35,s.y*0.92);}',
         'SCENE.forEach(function(it){',
         'var o=null;',
@@ -1501,14 +1506,14 @@
         'm.rotation.set(it.rotation[0],it.rotation[1],it.rotation[2]);',
         'm.scale.set(it.scale[0],it.scale[1],it.scale[2]);',
         'm.traverse(function(n){if(n.isMesh)n.castShadow=true;});',
-        'scene.add(m);if(it.isPlayer){playerMesh=m;setPlayerDims(m);}else if(!it.dynamic)regBox(m);m.userData.clickName=it.name;clickTargets.push(m);registerExtras(it,m);regGrab(m,it);});})();return;}',
+        'scene.add(m);if(it.isPlayer){playerMesh=m;setPlayerDims(m);camHeight=(it.camHeight!==undefined)?it.camHeight:0;}else if(!it.dynamic)regBox(m);m.userData.clickName=it.name;clickTargets.push(m);registerExtras(it,m);regGrab(m,it);});})();return;}',
         'if(!o)return;',
         'o.position.set(it.position[0],it.position[1],it.position[2]);',
         'o.rotation.set(it.rotation[0],it.rotation[1],it.rotation[2]);',
         'o.scale.set(it.scale[0],it.scale[1],it.scale[2]);',
         'o.castShadow=true;o.receiveShadow=true;',
         'if(it.pixelArt){if(it.type==="cube"){var _fa=it.pixelArt.faceArt||null;var _pf=_fa?["right","left","top","bottom","front","back"].filter(function(fn){return _fa[fn];}):((it.pixelArt.faces&&it.pixelArt.faces.length)?it.pixelArt.faces:["right","left","top","bottom","front","back"]);var _fo=["right","left","top","bottom","front","back"];var _tx=pixelTex(it.pixelArt);o.material=_fo.map(function(fn){var _ft=(_fa&&_fa[fn])?pixelTex(_fa[fn]):_tx;return _pf.indexOf(fn)!==-1?new THREE.MeshStandardMaterial({map:_ft,transparent:true,roughness:.7,color:0xffffff}):new THREE.MeshStandardMaterial({color:it.color,roughness:.7});});}else{o.material.map=pixelTex(it.pixelArt);o.material.color.set(0xffffff);o.material.transparent=true;o.material.needsUpdate=true;}}',
-        'scene.add(o);if(it.isPlayer){playerMesh=o;setPlayerDims(o);}else if(!it.dynamic)regBox(o);o.userData.clickName=it.name;clickTargets.push(o);registerExtras(it,o);regGrab(o,it);});',
+        'scene.add(o);if(it.isPlayer){playerMesh=o;setPlayerDims(o);camHeight=(it.camHeight!==undefined)?it.camHeight:0;}else if(!it.dynamic)regBox(o);o.userData.clickName=it.name;clickTargets.push(o);registerExtras(it,o);regGrab(o,it);});',
         'var R=0.45;if(playerMesh)R=Math.max(0.45,playerHalfD);',
         'var pos=new THREE.Vector3(0,0,6),vel=new THREE.Vector3(),yaw=0,pitch=0,grounded=false,orbYaw=0,orbPitch=0,orbDist=5;',
         '(function(){var sx=0,sz=6,sy=0.1;if(spawnPt){sx=spawnPt.position[0];sz=spawnPt.position[2];sy=spawnPt.position[1];yaw=spawnPt.rotation[1]||0;}else if(playerMesh){sx=playerMesh.position.x;sz=playerMesh.position.z;sy=playerMesh.position.y-playerFootOff;}var g=supportAt(sx,sz,sy+1.0);pos.set(sx,Math.max(sy+0.05,g),sz);spawnX=sx;spawnY=pos.y;spawnZ=sz;spawnYaw=yaw;orbYaw=yaw;})();',
@@ -1604,7 +1609,7 @@
         'var sdx=pos.x-lastPX,sdz=pos.z-lastPZ;lastPX=pos.x;lastPZ=pos.z;stepAcc+=Math.sqrt(sdx*sdx+sdz*sdz);',
         'if(stepAcc>=2){stepCount+=Math.floor(stepAcc/2);stepAcc=stepAcc%2;var sc=document.getElementById("stepcount");if(sc)sc.textContent=stepCount;}',
         'if(playerMesh){playerMesh.position.set(pos.x,pos.y+playerFootOff,pos.z);playerMesh.rotation.y=orbYaw;}',
-        'if(playerMesh){camera.position.set(pos.x+Math.sin(orbYaw)*orbDist,pos.y+playerEye+0.3,pos.z+Math.cos(orbYaw)*orbDist);camera.quaternion.setFromEuler(new THREE.Euler(orbPitch,orbYaw,0,"YXZ"));}else{camera.position.set(pos.x,pos.y+1.65,pos.z);}',
+        'if(playerMesh){camera.position.set(pos.x+Math.sin(orbYaw)*orbDist,pos.y+playerEye+0.3+camHeight,pos.z+Math.cos(orbYaw)*orbDist);camera.quaternion.setFromEuler(new THREE.Euler(orbPitch,orbYaw,0,"YXZ"));}else{camera.position.set(pos.x,pos.y+1.65,pos.z);}',
         'if(locked&&grabHeld){camera.getWorldDirection(grabDir);grabHeld.o.position.set(camera.position.x+grabDir.x*2,camera.position.y+grabDir.y*2,camera.position.z+grabDir.z*2);}',
         'renderer.render(scene,camera);})();',
         '<\/script>',
@@ -1696,6 +1701,7 @@
       if (!selectedObject) return;
       gameObjects.forEach(o => { o.userData.isPlayer = false; });
       selectedObject.userData.isPlayer = true;
+      refreshPlayerCamIcon();
       updateHierarchy();
       updateInspector();
     }
@@ -1703,8 +1709,53 @@
     function unsetPlayer() {
       if (!selectedObject) return;
       selectedObject.userData.isPlayer = false;
+      refreshPlayerCamIcon();
       updateHierarchy();
       updateInspector();
+    }
+
+    // Editor-only camera icon: a little 📷 badge shown in the middle of
+    // the player object in the editor viewport, so you can see where the
+    // camera sits. It is never serialized and never reaches Preview or
+    // exported games (the export template has no such code).
+    function makePlayerCamIcon() {
+      var cv = document.createElement('canvas');
+      cv.width = 256; cv.height = 256;
+      var ctx = cv.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = 'rgba(255,255,255,0.92)';
+        ctx.beginPath(); ctx.arc(128, 128, 112, 0, Math.PI * 2); ctx.fill();
+        ctx.font = '170px serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('📷', 128, 138);
+      }
+      var tex = new THREE.CanvasTexture(cv);
+      var spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+      spr.scale.set(0.8, 0.8, 1);
+      spr.renderOrder = 999;
+      spr.userData.isPlayerCamIcon = true;
+      return spr;
+    }
+
+    function refreshPlayerCamIcon() {
+      // Remove any old icon by scanning children for the marker (not the
+      // saved reference), so a cloned player never keeps a stale badge.
+      gameObjects.forEach(function (o) {
+        for (var i = o.children.length - 1; i >= 0; i--) {
+          var c = o.children[i];
+          if (c.userData && c.userData.isPlayerCamIcon) o.remove(c);
+        }
+        o.userData.playerCamIcon = null;
+      });
+      var p = null;
+      gameObjects.forEach(function (o) { if (o.userData && o.userData.isPlayer) p = o; });
+      if (!p) return;
+      // A child of the player at its local middle (0,0,0): it travels and
+      // turns with the object, and depthTest:false keeps it visible even
+      // though it sits inside the object's mesh.
+      var icon = makePlayerCamIcon();
+      p.add(icon);
+      p.userData.playerCamIcon = icon;
     }
 
     function cloneSelected() {
@@ -1723,6 +1774,8 @@
       scene.add(clone);
       gameObjects.push(clone);
       selectObject(clone);
+      // A cloned player must not keep the camera badge (it is not the player).
+      refreshPlayerCamIcon();
       updateHierarchy();
       if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
     }
@@ -1815,9 +1868,10 @@
       // Watches, spawn points, lights, particles, terrain, enemies and menus
       // are not playable bodies, so they cannot be the player.
       const canBePlayer = ['spawnpoint', 'watch', 'particle', 'pointlight', 'spotlight', 'terrain', 'enemy', 'menu'].indexOf(selectedObject.userData.primitiveType) === -1;
+      const camH = (selectedObject.userData.camHeight !== undefined) ? selectedObject.userData.camHeight : 0;
       const playerSection = canBePlayer ? `
         <div class="section-header">🧍 Player</div>
-        ${isPlayer ? '<div style="font-size:11px;color:#8b5cf6;margin-bottom:6px;">★ This object is the player. In Preview and downloads, a camera follows it — move the mouse to orbit around it and see the whole avatar.</div><button class="btn btn-danger" onclick="unsetPlayer()">Remove as player</button>' : '<div style="font-size:11px;color:#888;margin-bottom:6px;">Hook this object up as the player. A camera will follow it in Preview and downloads — orbit around it with the mouse.</div><button class="btn btn-action" onclick="setSelectedAsPlayer()">Set as player</button>'}
+        ${isPlayer ? '<div style="font-size:11px;color:#8b5cf6;margin-bottom:6px;">★ This object is the player. In Preview and downloads, the camera stays behind it — move the mouse to turn it, and pull the wheel back for third person.</div><div class="prop-row"><label>Camera height</label><input type="number" step="0.1" min="-1" max="2" value="' + camH + '" onchange="setPlayerCamHeight(parseFloat(this.value) || 0)" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;"></div><button class="btn btn-danger" onclick="unsetPlayer()">Remove as player</button>' : '<div style="font-size:11px;color:#888;margin-bottom:6px;">Hook this object up as the player. A camera will follow behind it in Preview and downloads — the mouse turns it, and the wheel pulls back for third person.</div><button class="btn btn-action" onclick="setSelectedAsPlayer()">Set as player</button>'}
       ` : '';
       const wd = selectedObject.userData.watchData || { title: 'My Watch', buttons: [] };
       const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -2158,6 +2212,12 @@
     function setEnemyHp(v) {
       if (!selectedObject || !selectedObject.userData.enemy) return;
       selectedObject.userData.enemy.hp = Math.max(1, Math.round(v) || 100);
+    }
+    function setPlayerCamHeight(v) {
+      if (!selectedObject || !selectedObject.userData.isPlayer) return;
+      var n = parseFloat(v);
+      if (isNaN(n)) n = 0;
+      selectedObject.userData.camHeight = Math.max(-1, Math.min(2, n));
     }
     function setEnemyHealthBar(on) {
       if (!selectedObject || !selectedObject.userData.enemy) return;
