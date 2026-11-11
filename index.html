@@ -68,6 +68,7 @@
 
     .item { padding: 6px 8px; cursor: pointer; border-radius: 3px; font-size: 13px; margin-top: 2px; }
     .item.selected { background: #094771; color: #fff; border-left: 3px solid #007acc; }
+    .item.multi { background: #2a4a6b; color: #cfe8ff; border-left: 3px solid #4ec9b0; }
     
     .section-header { font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: #888; margin: 12px 0 6px 0; border-bottom: 1px solid #333; padding-bottom: 2px; }
     .prop-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; font-size: 12px; }
@@ -118,6 +119,7 @@
     <label class="opt" title="Show grid in Preview & downloads"><input type="checkbox" id="optGrid"> Grid</label>
     <input type="file" id="fileInput" accept=".ajg,.json" style="display:none;" onchange="importSceneFile(event)">
     <input type="file" id="glbInput" accept=".glb" style="display:none;" onchange="importGLBFile(event)">
+    <input type="file" id="enemyGlbInput" accept=".glb" style="display:none;" onchange="importEnemyGLBFile(event)">
     
     <div style="height:16px; width:1px; background:#444;"></div>
     
@@ -128,6 +130,7 @@
     <div style="height:16px; width:1px; background:#444;"></div>
     
     <button class="btn" onclick="cloneSelected()">📋 Clone</button>
+    <button class="btn" onclick="mergeSelected()">🔗 Merge</button>
     <button class="btn btn-danger" onclick="deleteSelected()">🗑️ Delete</button>
     <button class="btn" onclick="addPrimitive('cube')">+ Cube</button>
     <button class="btn" onclick="addPrimitive('sphere')">+ Sphere</button>
@@ -305,6 +308,7 @@
     });
     transformGizmo.addEventListener('change', () => {
       if (selectedObject) updateInspectorValues();
+      syncCamAfterTransform();
     });
     scene.add(transformGizmo);
 
@@ -395,9 +399,12 @@
         while (hitObj.parent && hitObj.parent !== scene && gameObjects.includes(hitObj.parent)) {
           hitObj = hitObj.parent;
         }
-        selectObject(hitObj);
+        // Shift-click adds to the multi-selection (for Merge); a plain
+        // click replaces the selection.
+        if (event.shiftKey) toggleMultiSelect(hitObj);
+        else { multiSelected = []; selectObject(hitObj); }
         // Click-drag on a selected terrain paints it with the brush.
-        if (hitObj.userData.primitiveType === 'terrain') {
+        if (hitObj.userData.primitiveType === 'terrain' && !event.shiftKey) {
           terrainPainting = true;
           terrainPaintTarget = hitObj;
           orbit.enabled = false;
@@ -561,23 +568,22 @@
         applyTerrainHeights(mesh);
         mesh.position.set(0, 0, 0);
       } else if (typeName === 'enemy') {
-        // Feature 6: red chaser with a simple face (two eyes).
+        // Feature 6: red chaser with a simple face (two eyes). The look is
+        // built by buildDefaultEnemyLook; a GLB model (Set Enemy) replaces
+        // it — applyEnemyModel runs below after the transform block.
         mesh = new THREE.Group();
         const ec = (customData && customData.enemy) ? customData.enemy : { speed: 2, sight: 'look', hp: 100, showHealthBar: false };
-        mesh.userData.enemy = { speed: ec.speed !== undefined ? ec.speed : 2, sight: ['ignore', 'look', 'blind', 'notice'].indexOf(ec.sight) !== -1 ? ec.sight : 'look', hp: ec.hp !== undefined ? Math.max(1, Math.round(ec.hp)) : 100, showHealthBar: !!ec.showHealthBar };
-        const body = new THREE.Mesh(new THREE.SphereGeometry(0.6, 24, 18), new THREE.MeshStandardMaterial({ color: customData ? customData.color : 0xcc2222, roughness: 0.4 }));
-        body.position.y = 0.6;
-        mesh.add(body);
-        const eyeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2 });
-        const pupMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.2 });
-        [-0.22, 0.22].forEach(function(ex) {
-          const eye = new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 12), eyeMat);
-          eye.position.set(ex, 0.77, 0.48);
-          mesh.add(eye);
-          const pup = new THREE.Mesh(new THREE.SphereGeometry(0.06, 10, 10), pupMat);
-          pup.position.set(ex, 0.77, 0.59);
-          mesh.add(pup);
-        });
+        mesh.userData.enemy = { speed: ec.speed !== undefined ? ec.speed : 2, sight: ['ignore', 'look', 'blind', 'notice'].indexOf(ec.sight) !== -1 ? ec.sight : 'look', hp: ec.hp !== undefined ? Math.max(1, Math.round(ec.hp)) : 100, showHealthBar: !!ec.showHealthBar, projectile: ['none', 'fireball', 'cork', 'gun'].indexOf(ec.projectile) !== -1 ? ec.projectile : 'none' };
+        if (ec.glbData) mesh.userData.enemy.glbData = ec.glbData;
+        mesh.userData.enemyColor = customData ? customData.color : 0xcc2222;
+        buildDefaultEnemyLook(mesh);
+        mesh.position.set(0, 0, 0);
+      } else if (typeName === 'merged') {
+        // A merged group: one hierarchy entry that moves as one. Its parts
+        // are rebuilt below (after the common transform block) from
+        // customData.groupParts. A fresh Merge (no customData) is never
+        // built here — mergeSelected builds it directly.
+        mesh = new THREE.Group();
         mesh.position.set(0, 0, 0);
       } else if (typeName === 'menu') {
         // Feature 8: title-screen menu. Editor-only marker; invisible in-game.
@@ -599,6 +605,15 @@
       mesh.userData.isGrabbable = customData ? !!customData.isGrabbable : false;
       mesh.userData.isPlayer = customData ? !!customData.isPlayer : false;
       mesh.userData.camHeight = (customData && customData.camHeight !== undefined) ? customData.camHeight : 0;
+      // The player's camera object (camObj), a GLB center shift and the
+      // Visible flag all ride along in .ajg saves and are restored here.
+      // Old saves without them get the defaults (no camObj, no shift,
+      // visible).
+      if (customData && customData.camObj) mesh.userData.camObj = JSON.parse(JSON.stringify(customData.camObj));
+      if (customData && customData.centerShift) mesh.userData.centerShift = customData.centerShift.slice();
+      if (customData && customData.centerPosDelta) mesh.userData.centerPosDelta = customData.centerPosDelta.slice();
+      mesh.userData.visible = (customData && customData.visible === false) ? false : true;
+      if (customData && customData.groupParts) mesh.userData.groupParts = JSON.parse(JSON.stringify(customData.groupParts));
       // In-game grab & throw (Preview / downloads): cubes, spheres, glbs and
       // pixelart can be grabbed by default; everything else (ground, terrain,
       // spawn, watch, menu, enemy, lights, particles) cannot. Saved per
@@ -635,15 +650,34 @@
       if (customData && customData.dynamic) mesh.userData.dynamic = { vel: [0, 0, 0], restitution: (customData.dynamic.restitution !== undefined ? customData.dynamic.restitution : 0.5) };
       if (customData && customData.menu && typeName === 'menu') mesh.userData.menu = { title: customData.menu.title || 'My Game', buttons: (customData.menu.buttons || []).slice() };
 
+      // Merged group parts: each part was saved with its position/rotation/
+      // scale RELATIVE to the group, so building it with addPrimitive and
+      // then moving it under the group keeps the local transform as-is.
+      if (typeName === 'merged' && customData && customData.groupParts) {
+        customData.groupParts.forEach(function(partItem) {
+          var part = addPrimitive(partItem.type, partItem);
+          var pi = gameObjects.indexOf(part);
+          if (pi > -1) gameObjects.splice(pi, 1);
+          scene.remove(part);
+          mesh.add(part);
+        });
+      }
+      // An enemy with a GLB model set: swap the red sphere for the model
+      // now (async — the model mounts when the parse finishes).
+      if (typeName === 'enemy' && mesh.userData.enemy && mesh.userData.enemy.glbData) applyEnemyModel(mesh);
+      // A hidden object is ghosted in the editor so it can still be found
+      // and selected; it is fully hidden only in Preview / exports.
+      applyEditorVisibility(mesh);
+
       scene.add(mesh);
       gameObjects.push(mesh);
       selectObject(mesh);
       updateHierarchy();
       if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
+      return mesh;
     }
 
-    function serializeScene() {
-      return gameObjects.map(obj => {
+    function serializeObject(obj) {
         let hexColor = '#007acc';
         // A painted cube stores its plain color, so the save keeps the base
         // color (not the white of its painted faces).
@@ -671,6 +705,11 @@
         if (obj.userData.pixelArt) item.pixelArt = obj.userData.pixelArt;
         if (obj.userData.isPlayer) item.isPlayer = true;
         if (obj.userData.camHeight) item.camHeight = obj.userData.camHeight;
+        if (obj.userData.isPlayer && obj.userData.camObj) item.camObj = JSON.parse(JSON.stringify(obj.userData.camObj));
+        if (obj.userData.centerShift) item.centerShift = obj.userData.centerShift.slice();
+        if (obj.userData.centerPosDelta) item.centerPosDelta = obj.userData.centerPosDelta.slice();
+        if (obj.userData.visible === false) item.visible = false;
+        if (obj.userData.groupParts) item.groupParts = JSON.parse(JSON.stringify(obj.userData.groupParts));
         if (obj.userData.particle) item.particle = JSON.parse(JSON.stringify(obj.userData.particle));
         if (obj.userData.light) item.light = JSON.parse(JSON.stringify(obj.userData.light));
         if (obj.userData.terrain) item.terrain = { size: obj.userData.terrain.size, segments: obj.userData.terrain.segments, heights: obj.userData.terrain.heights.slice() };
@@ -688,7 +727,12 @@
         if (obj.userData.sound) item.sound = JSON.parse(JSON.stringify(obj.userData.sound));
         if (obj.userData.dynamic) item.dynamic = { restitution: obj.userData.dynamic.restitution !== undefined ? obj.userData.dynamic.restitution : 0.5 };
         return item;
-      });
+    }
+
+    function serializeScene() {
+      // The Camera object is not a scene item of its own — it lives on the
+      // player item as item.camObj — so it is filtered out here.
+      return gameObjects.filter(obj => !(obj.userData && obj.userData.primitiveType === 'camera')).map(function(obj) { return serializeObject(obj); });
     }
 
     function deserializeScene(data) {
@@ -696,12 +740,13 @@
       gameObjects.forEach(obj => scene.remove(obj));
       gameObjects.length = 0;
       selectedObject = null;
+      multiSelected = [];
 
       data.forEach(item => {
         if (item.type === 'glb' && item.glbData) addGLBFromData(item);
         else addPrimitive(item.type, item);
       });
-      refreshPlayerCamIcon();
+      refreshPlayerCamera();
       updateHierarchy();
       updateInspector();
     }
@@ -1350,13 +1395,21 @@
           model.userData.canGrab = (item.canGrab !== undefined) ? !!item.canGrab : true;
           model.userData.glbData = item.glbData;
           if (item.code) model.userData.objCode = JSON.parse(JSON.stringify(item.code));
+          if (item.camObj) model.userData.camObj = JSON.parse(JSON.stringify(item.camObj));
+          if (item.centerShift) model.userData.centerShift = item.centerShift.slice();
+          if (item.centerPosDelta) model.userData.centerPosDelta = item.centerPosDelta.slice();
+          model.userData.visible = (item.visible === false) ? false : true;
           model.position.fromArray(item.position);
           model.rotation.set(item.rotation[0], item.rotation[1], item.rotation[2]);
           model.scale.fromArray(item.scale);
           model.traverse(function(n){ if (n.isMesh) n.castShadow = true; });
+          // A saved center shift re-applies to the fresh model (the saved
+          // position already includes the pivot move).
+          applyStoredCenterShift(model);
+          applyEditorVisibility(model);
           scene.add(model);
           gameObjects.push(model);
-          refreshPlayerCamIcon();
+          refreshPlayerCamera();
           updateHierarchy();
         }, function() {
           showEnginePopup('A .glb model in the scene file could not be loaded.');
@@ -1376,7 +1429,10 @@
       setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 2000);
     }
     function buildStandaloneHTML() {
-      const sceneData = serializeScene();
+      // Exports flatten merged groups into their parts (world transforms),
+      // so the game template needs no merged-group support. The .ajg save
+      // keeps the merged group as one item.
+      const sceneData = flattenSceneForExport();
       const json = JSON.stringify(sceneData).replace(/<\//g, '<\\/');
       const watches = sceneData.filter(o => o.type === 'watch');
       const watchesJson = JSON.stringify(watches).replace(/<\//g, '<\\/');
@@ -1441,7 +1497,7 @@
         'sun.position.set(20,30,10);sun.castShadow=true;',
         'scene.add(sun);',
         ...(showGrid ? ['scene.add(new THREE.GridHelper(60,60,0xffffff,0xbbbbbb));'] : []),
-        'var solids=[];var clickTargets=[];var terrains=[];var enemies=[];var particleSystems=[];var dynamics=[];var animated=[];var soundObjs=[];var objCodeObjs=[];var grabList=[];var grabHeld=null;var grabDir=new THREE.Vector3();',
+        'var solids=[];var clickTargets=[];var terrains=[];var enemies=[];var particleSystems=[];var dynamics=[];var animated=[];var soundObjs=[];var objCodeObjs=[];var grabList=[];var grabHeld=null;var grabDir=new THREE.Vector3();var projectiles=[];',
         'var hp=100;var gameTime=0;var spawnX=0,spawnY=0.1,spawnZ=6,spawnYaw=0;',
         'function updateHP(){var h=document.getElementById("hpcount");if(h)h.textContent=hp;}',
         'function die(){say("You died! Respawning...");hp=100;updateHP();pos.set(spawnX,Math.max(spawnY,0.1),spawnZ);vel.set(0,0,0);yaw=spawnYaw;orbYaw=spawnYaw;}',
@@ -1470,7 +1526,10 @@
         'function drawEnemyBar(e){var r=Math.max(0,Math.min(1,e.mesh.hp/e.maxHp));if(Math.abs(r-e.barRatio)<0.01)return;e.barRatio=r;var c=e.barCtx;if(!c)return;c.clearRect(0,0,128,16);c.fillStyle="rgba(0,0,0,0.65)";c.fillRect(0,0,128,16);c.fillStyle=r>0.5?"#22c55e":(r>0.25?"#eab308":"#ef4444");c.fillRect(2,2,124*r,12);if(e.barTex)e.barTex.needsUpdate=true;}',
         'function damageEnemy(e,amount){if(!e||!e.mesh||e.mesh.hp<=0)return;if(gameTime<e.dmgCd)return;e.dmgCd=gameTime+0.5;e.mesh.hp=Math.max(0,e.mesh.hp-amount);if(e.showBar&&e.barSpr)drawEnemyBar(e);}',
         'function killEnemy(idx){var e=enemies[idx];if(!e)return;enemies.splice(idx,1);scene.remove(e.mesh);for(var i=objCodeObjs.length-1;i>=0;i--){if(objCodeObjs[i].o===e.mesh)objCodeObjs.splice(i,1);}for(var j=dynamics.length-1;j>=0;j--){if(dynamics[j].o===e.mesh)dynamics.splice(j,1);}for(var k=clickTargets.length-1;k>=0;k--){if(clickTargets[k]===e.mesh)clickTargets.splice(k,1);}for(var m=0;m<objCodeObjs.length;m++){var oc=objCodeObjs[m];var ei=oc.eIn.indexOf(e.mesh);if(ei!==-1)oc.eIn.splice(ei,1);var oi=oc.oIn.indexOf(e.mesh);if(oi!==-1)oc.oIn.splice(oi,1);}}',
-        'function updateEnemies(dt){if(!locked)return;for(var i=enemies.length-1;i>=0;i--){var e=enemies[i];var dx=pos.x-e.mesh.position.x,dz=pos.z-e.mesh.position.z;var dist=Math.sqrt(dx*dx+dz*dz);var sight=e.sight||"look";var chasing=false;if(sight==="look"){chasing=true;}else if(sight==="notice"){var seen=(dist<12)&&losClear(e.mesh.position.x,e.mesh.position.y+0.8,e.mesh.position.z,pos.x,pos.y+1.2,pos.z);if(seen){e.state="chase";e.unseen=0;}else{e.unseen+=dt;if(e.unseen>=5)e.state="wander";}chasing=(e.state==="chase");}if(chasing){if(dist>0.6){e.mesh.position.x+=dx/dist*e.speed*dt;e.mesh.position.z+=dz/dist*e.speed*dt;}e.mesh.rotation.y=Math.atan2(dx,dz);}else{e.wTimer-=dt;if(e.wTimer<=0){e.wTimer=2+Math.random()*3;e.wAngle=Math.random()*Math.PI*2;}var ws=0.8;e.mesh.position.x+=Math.sin(e.wAngle)*ws*dt;e.mesh.position.z+=Math.cos(e.wAngle)*ws*dt;e.mesh.rotation.y=e.wAngle;}var gy=supportAt(e.mesh.position.x,e.mesh.position.z,e.mesh.position.y+1);e.mesh.position.y=gy+e.yOff;if(dist<0.9&&Math.abs(e.mesh.position.y-pos.y)<2){if(gameTime-e.lastHit>1){e.lastHit=gameTime;hp-=10;updateHP();if(hp<=0)die();}}if(e.showBar&&e.barSpr)drawEnemyBar(e);if(grabHeld){if(gameTime>=e.dmgCd){var hb=new THREE.Box3().setFromObject(grabHeld.o);var eb2=new THREE.Box3().setFromObject(e.mesh);if(hb.intersectsBox(eb2))damageEnemy(e,25);}}if(e.mesh.hp<=0){killEnemy(i);}}}',
+        'function makeProjectileMesh(kind){var m;if(kind==="fireball"){m=new THREE.Mesh(new THREE.SphereGeometry(0.15,12,12),new THREE.MeshStandardMaterial({color:0xff6600,emissive:0xff4400,emissiveIntensity:1.2}));}else if(kind==="cork"){m=new THREE.Mesh(new THREE.CylinderGeometry(0.09,0.11,0.3,10),new THREE.MeshStandardMaterial({color:0xb08954,roughness:0.8}));}else{m=new THREE.Mesh(new THREE.SphereGeometry(0.08,10,10),new THREE.MeshStandardMaterial({color:0x222222,roughness:0.3,metalness:0.6}));}return m;}',
+        'function fireProjectile(e){var m=makeProjectileMesh(e.proj);var sx=e.mesh.position.x,sy=e.mesh.position.y+0.8,sz=e.mesh.position.z;m.position.set(sx,sy,sz);var dx=pos.x-sx,dy=(pos.y+1.2)-sy,dz=pos.z-sz;var len=Math.sqrt(dx*dx+dy*dy+dz*dz)||1;scene.add(m);projectiles.push({mesh:m,vx:dx/len*12,vy:dy/len*12,vz:dz/len*12,life:3,hit:false});}',
+        'function updateProjectiles(dt){for(var i=projectiles.length-1;i>=0;i--){var p=projectiles[i];p.mesh.position.x+=p.vx*dt;p.mesh.position.y+=p.vy*dt;p.mesh.position.z+=p.vz*dt;p.life-=dt;var dx=p.mesh.position.x-pos.x,dy=p.mesh.position.y-(pos.y+1.2),dz=p.mesh.position.z-pos.z;var d2=dx*dx+dy*dy+dz*dz;if(!p.hit&&d2<0.49){p.hit=true;hp-=10;updateHP();if(hp<=0)die();}var hitSolid=false;for(var s=0;s<solids.length;s++){var b=solids[s];if(p.mesh.position.x>b.x0&&p.mesh.position.x<b.x1&&p.mesh.position.y>b.y0&&p.mesh.position.y<b.y1&&p.mesh.position.z>b.z0&&p.mesh.position.z<b.z1){hitSolid=true;break;}}if(p.hit||p.life<=0||p.mesh.position.y<0||hitSolid){scene.remove(p.mesh);projectiles.splice(i,1);}}}',
+        'function updateEnemies(dt){if(!locked)return;for(var i=enemies.length-1;i>=0;i--){var e=enemies[i];var dx=pos.x-e.mesh.position.x,dz=pos.z-e.mesh.position.z;var dist=Math.sqrt(dx*dx+dz*dz);var sight=e.sight||"look";var chasing=false;if(sight==="look"){chasing=true;}else if(sight==="notice"){var seen=(dist<12)&&losClear(e.mesh.position.x,e.mesh.position.y+0.8,e.mesh.position.z,pos.x,pos.y+1.2,pos.z);if(seen){e.state="chase";e.unseen=0;}else{e.unseen+=dt;if(e.unseen>=5)e.state="wander";}chasing=(e.state==="chase");}if(chasing){if(dist>(e.touchR||0.6)){e.mesh.position.x+=dx/dist*e.speed*dt;e.mesh.position.z+=dz/dist*e.speed*dt;}e.mesh.rotation.y=Math.atan2(dx,dz);}else{e.wTimer-=dt;if(e.wTimer<=0){e.wTimer=2+Math.random()*3;e.wAngle=Math.random()*Math.PI*2;}var ws=0.8;e.mesh.position.x+=Math.sin(e.wAngle)*ws*dt;e.mesh.position.z+=Math.cos(e.wAngle)*ws*dt;e.mesh.rotation.y=e.wAngle;}var gy=supportAt(e.mesh.position.x,e.mesh.position.z,e.mesh.position.y+1);e.mesh.position.y=gy+e.yOff;if(dist<(e.touchR||0.6)+0.3&&Math.abs(e.mesh.position.y-pos.y)<2){if(gameTime-e.lastHit>1){e.lastHit=gameTime;hp-=10;updateHP();if(hp<=0)die();}}if(e.proj&&e.proj!=="none"&&chasing){e.shootCd-=dt;var seen2=(dist<15)&&losClear(e.mesh.position.x,e.mesh.position.y+0.8,e.mesh.position.z,pos.x,pos.y+1.2,pos.z);if(e.shootCd<=0&&seen2){e.shootCd=2;fireProjectile(e);}}if(e.showBar&&e.barSpr)drawEnemyBar(e);if(grabHeld){if(gameTime>=e.dmgCd){var hb=new THREE.Box3().setFromObject(grabHeld.o);var eb2=new THREE.Box3().setFromObject(e.mesh);if(hb.intersectsBox(eb2))damageEnemy(e,25);}}if(e.mesh.hp<=0){killEnemy(i);}}}',
         'function updateSoundCollide(dt){for(var i=0;i<soundObjs.length;i++){var s=soundObjs[i];if(s.trigger!=="onPlayerCollide")continue;s.cd-=dt;if(s.cd>0)continue;var b=new THREE.Box3().setFromObject(s.o);if(pos.x>b.min.x-R&&pos.x<b.max.x+R&&pos.z>b.min.z-R&&pos.z<b.max.z+R&&pos.y+1.6>b.min.y&&pos.y<b.max.y){playSound(s.preset);s.cd=0.8;}}}',
         'function checkObjPair(oc,b,other,cur){var ob=new THREE.Box3().setFromObject(other);if(b.intersectsBox(ob)){cur.push(other);if(oc.oIn.indexOf(other)===-1)runObjCode(oc.code.onObjectCollide,oc.o,0,other);}}',
         'function updateObjCollide(){for(var i=0;i<objCodeObjs.length;i++){var oc=objCodeObjs[i];if(oc.o===playerMesh||(!oc.code.onPlayerCollide&&!oc.code.onEnemyCollide&&!oc.code.onObjectCollide))continue;var b=new THREE.Box3().setFromObject(oc.o);if(oc.code.onPlayerCollide){var inside=(pos.x>=b.min.x-R&&pos.x<=b.max.x+R&&pos.z>=b.min.z-R&&pos.z<=b.max.z+R&&pos.y+1.6>=b.min.y&&pos.y<=b.max.y);if(inside&&!oc.inside){oc.inside=true;runObjCode(oc.code.onPlayerCollide,oc.o,0,playerMesh||{isPlayer:true,name:"Player"});}else if(!inside){oc.inside=false;}}if(oc.code.onEnemyCollide){var cur=[];for(var ei=0;ei<enemies.length;ei++){var em=enemies[ei].mesh;if(em===oc.o)continue;var eb=new THREE.Box3().setFromObject(em);if(b.intersectsBox(eb)){cur.push(em);if(oc.eIn.indexOf(em)===-1)runObjCode(oc.code.onEnemyCollide,oc.o,0,em);}}oc.eIn=cur;}if(oc.code.onObjectCollide){var curO=[];for(var di=0;di<dynamics.length;di++){var dm=dynamics[di].o;if(dm!==oc.o&&dm!==playerMesh&&!isEnemyMesh(dm))checkObjPair(oc,b,dm,curO);}for(var si=0;si<solids.length;si++){var sm=solids[si].o;if(sm!==oc.o&&sm!==playerMesh&&!isEnemyMesh(sm))checkObjPair(oc,b,sm,curO);}oc.oIn=curO;}}}',
@@ -1484,8 +1543,9 @@
         'function pixelTex(pa){var c=document.createElement("canvas");var g=c.getContext("2d");var t=new THREE.CanvasTexture(c);t.magFilter=THREE.NearestFilter;t.minFilter=THREE.NearestFilter;t.generateMipmaps=false;if(pa.image){var im=new Image();im.onload=function(){c.width=im.naturalWidth;c.height=im.naturalHeight;g.drawImage(im,0,0);t.needsUpdate=true;};im.src=pa.image;c.width=1;c.height=1;}else{c.width=pa.size;c.height=pa.size;for(var y=0;y<pa.size;y++)for(var x=0;x<pa.size;x++){var col=pa.pixels[y*pa.size+x];if(col){g.fillStyle=col;g.fillRect(x,y,1,1);}}}return t;}',
         'var spawnPt=null;',
         'function regBox(o){var b=new THREE.Box3().setFromObject(o);solids.push({o:o,x0:b.min.x,x1:b.max.x,y0:b.min.y,y1:b.max.y,z0:b.min.z,z1:b.max.z});}',
-        'var playerMesh=null,playerFootOff=0.9,playerHalfD=0.3,playerEye=1.6,camHeight=0;',
+        'var playerMesh=null,playerFootOff=0.9,playerHalfD=0.3,playerEye=1.6,camHeight=0,camOff=[0,0,0],camRot=[0,0,0],playerHidden=false;',
         'function setPlayerDims(o){var b=new THREE.Box3().setFromObject(o);var s=new THREE.Vector3();b.getSize(s);playerFootOff=o.position.y-b.min.y;playerHalfD=Math.max(s.x,s.z)/2;playerEye=Math.max(0.35,s.y*0.92);}',
+        'function loadCamObj(it){if(it.camObj&&it.camObj.pos){camOff=it.camObj.pos.slice();camRot=(it.camObj.rot||[0,0,0]).slice();}else{camOff=[0,playerEye+0.3,0];camRot=[0,0,0];}}',
         'SCENE.forEach(function(it){',
         'var o=null;',
         'if(it.type==="cube"){o=new THREE.Mesh(new THREE.BoxGeometry(1,1,1),new THREE.MeshStandardMaterial({color:it.color,roughness:.7}));}',
@@ -1494,26 +1554,27 @@
         'else if(it.type==="pixelart"&&it.pixelArt){o=new THREE.Mesh(new THREE.PlaneGeometry(2,2),new THREE.MeshStandardMaterial({map:pixelTex(it.pixelArt),transparent:true,side:THREE.DoubleSide,roughness:.7}));}',
         'else if(it.type==="watch"){return;}',
         'else if(it.type==="menu"){return;}',
-        'else if(it.type==="particle"){var pcfg=it.particle||{rate:10,lifetime:2,size:0.2,color:"#ffaa00",spread:0.5,gravity:-2};particleSystems.push(makeParticleSystem({position:new THREE.Vector3(it.position[0],it.position[1],it.position[2])},pcfg));var pm=new THREE.Mesh(new THREE.SphereGeometry(0.15,12,12),new THREE.MeshStandardMaterial({color:pcfg.color,emissive:pcfg.color,emissiveIntensity:0.9}));pm.position.set(it.position[0],it.position[1],it.position[2]);scene.add(pm);pm.userData.clickName=it.name;clickTargets.push(pm);if(it.sound)soundObjs.push({o:pm,name:it.name,preset:it.sound.preset||"coin",trigger:migTrigger(it.sound.trigger),cd:0});registerObjCode(it,pm);return;}',
-        'else if(it.type==="pointlight"){var lcf=it.light||{color:"#ffffff",intensity:1,distance:10};var pl2=new THREE.PointLight(lcf.color,lcf.intensity,lcf.distance);pl2.position.set(it.position[0],it.position[1],it.position[2]);scene.add(pl2);var lm=new THREE.Mesh(new THREE.SphereGeometry(0.14,12,12),new THREE.MeshStandardMaterial({color:lcf.color,emissive:lcf.color,emissiveIntensity:1}));lm.position.set(it.position[0],it.position[1],it.position[2]);scene.add(lm);lm.userData.clickName=it.name;clickTargets.push(lm);registerExtras(it,lm);return;}',
-        'else if(it.type==="spotlight"){var scf=it.light||{color:"#ffffff",intensity:1,distance:15,angle:0.5};var sl2=new THREE.SpotLight(scf.color,scf.intensity,scf.distance,scf.angle||0.5,0.5);sl2.position.set(it.position[0],it.position[1],it.position[2]);var stg=new THREE.Object3D();stg.position.set(it.position[0],it.position[1]-1,it.position[2]);scene.add(stg);sl2.target=stg;scene.add(sl2);var sm=new THREE.Mesh(new THREE.SphereGeometry(0.14,12,12),new THREE.MeshStandardMaterial({color:scf.color,emissive:scf.color,emissiveIntensity:1}));sm.position.set(it.position[0],it.position[1],it.position[2]);scene.add(sm);sm.userData.clickName=it.name;clickTargets.push(sm);registerExtras(it,sm);return;}',
-        'else if(it.type==="terrain"){var tgeo=new THREE.PlaneGeometry(20,20,32,32);var tpa=tgeo.attributes.position;var th=(it.terrain&&it.terrain.heights)?it.terrain.heights:[];for(var ti=0;ti<tpa.count;ti++){tpa.setZ(ti,th[ti]||0);}tgeo.computeVertexNormals();tgeo.rotateX(-Math.PI/2);var tm=new THREE.Mesh(tgeo,new THREE.MeshStandardMaterial({color:it.color,roughness:0.9}));tm.position.set(it.position[0],it.position[1],it.position[2]);tm.scale.set(it.scale[0],it.scale[1],it.scale[2]);tm.receiveShadow=true;scene.add(tm);terrains.push({x:tm.position.x,y:tm.position.y,z:tm.position.z,sx:tm.scale.x,sy:tm.scale.y,sz:tm.scale.z,seg:32,heights:th});tm.userData.clickName=it.name;clickTargets.push(tm);if(it.sound)soundObjs.push({o:tm,name:it.name,preset:it.sound.preset||"coin",trigger:migTrigger(it.sound.trigger),cd:0});registerObjCode(it,tm);return;}',
-        'else if(it.type==="enemy"){var eg=new THREE.Group();var eb=new THREE.Mesh(new THREE.SphereGeometry(0.6,24,18),new THREE.MeshStandardMaterial({color:it.color,roughness:0.4}));eb.position.y=0.6;eg.add(eb);[-0.22,0.22].forEach(function(ex){var eye=new THREE.Mesh(new THREE.SphereGeometry(0.13,12,12),new THREE.MeshStandardMaterial({color:0xffffff}));eye.position.set(ex,0.77,0.48);eg.add(eye);var pup=new THREE.Mesh(new THREE.SphereGeometry(0.06,10,10),new THREE.MeshStandardMaterial({color:0x111111}));pup.position.set(ex,0.77,0.59);eg.add(pup);});eg.position.set(it.position[0],it.position[1],it.position[2]);eg.scale.set(it.scale[0],it.scale[1],it.scale[2]);var ehp=(it.enemy&&it.enemy.hp!==undefined)?Math.max(1,Math.round(it.enemy.hp)):100;eg.hp=ehp;eg.maxHp=ehp;scene.add(eg);var een={mesh:eg,speed:(it.enemy&&it.enemy.speed!==undefined)?it.enemy.speed:2,sight:(it.enemy&&it.enemy.sight)||"look",state:"wander",unseen:0,wTimer:0,wAngle:Math.random()*Math.PI*2,yOff:0.6*(it.scale[1]||1),lastHit:-10,maxHp:ehp,showBar:!!(it.enemy&&it.enemy.showHealthBar),dmgCd:-10,barCv:null,barCtx:null,barTex:null,barSpr:null,barRatio:-1};enemies.push(een);if(een.showBar){een.barCv=document.createElement("canvas");een.barCv.width=128;een.barCv.height=16;een.barCtx=een.barCv.getContext("2d");een.barTex=new THREE.CanvasTexture(een.barCv);een.barSpr=new THREE.Sprite(new THREE.SpriteMaterial({map:een.barTex,transparent:true}));een.barSpr.scale.set(1.5,0.19,1);een.barSpr.position.y=1.55;eg.add(een.barSpr);}eg.userData.clickName=it.name;clickTargets.push(eg);registerExtras(it,eg);return;}',
+        'else if(it.type==="particle"){var pcfg=it.particle||{rate:10,lifetime:2,size:0.2,color:"#ffaa00",spread:0.5,gravity:-2};var psys=makeParticleSystem({position:new THREE.Vector3(it.position[0],it.position[1],it.position[2])},pcfg);particleSystems.push(psys);if(it.visible===false)psys.pts.visible=false;var pm=new THREE.Mesh(new THREE.SphereGeometry(0.15,12,12),new THREE.MeshStandardMaterial({color:pcfg.color,emissive:pcfg.color,emissiveIntensity:0.9}));pm.position.set(it.position[0],it.position[1],it.position[2]);if(it.visible===false)pm.visible=false;scene.add(pm);pm.userData.clickName=it.name;clickTargets.push(pm);if(it.sound)soundObjs.push({o:pm,name:it.name,preset:it.sound.preset||"coin",trigger:migTrigger(it.sound.trigger),cd:0});registerObjCode(it,pm);return;}',
+        'else if(it.type==="pointlight"){var lcf=it.light||{color:"#ffffff",intensity:1,distance:10};var pl2=new THREE.PointLight(lcf.color,lcf.intensity,lcf.distance);pl2.position.set(it.position[0],it.position[1],it.position[2]);scene.add(pl2);var lm=new THREE.Mesh(new THREE.SphereGeometry(0.14,12,12),new THREE.MeshStandardMaterial({color:lcf.color,emissive:lcf.color,emissiveIntensity:1}));lm.position.set(it.position[0],it.position[1],it.position[2]);if(it.visible===false)lm.visible=false;scene.add(lm);lm.userData.clickName=it.name;clickTargets.push(lm);registerExtras(it,lm);return;}',
+        'else if(it.type==="spotlight"){var scf=it.light||{color:"#ffffff",intensity:1,distance:15,angle:0.5};var sl2=new THREE.SpotLight(scf.color,scf.intensity,scf.distance,scf.angle||0.5,0.5);sl2.position.set(it.position[0],it.position[1],it.position[2]);var stg=new THREE.Object3D();stg.position.set(it.position[0],it.position[1]-1,it.position[2]);scene.add(stg);sl2.target=stg;scene.add(sl2);var sm=new THREE.Mesh(new THREE.SphereGeometry(0.14,12,12),new THREE.MeshStandardMaterial({color:scf.color,emissive:scf.color,emissiveIntensity:1}));sm.position.set(it.position[0],it.position[1],it.position[2]);if(it.visible===false)sm.visible=false;scene.add(sm);sm.userData.clickName=it.name;clickTargets.push(sm);registerExtras(it,sm);return;}',
+        'else if(it.type==="terrain"){var tgeo=new THREE.PlaneGeometry(20,20,32,32);var tpa=tgeo.attributes.position;var th=(it.terrain&&it.terrain.heights)?it.terrain.heights:[];for(var ti=0;ti<tpa.count;ti++){tpa.setZ(ti,th[ti]||0);}tgeo.computeVertexNormals();tgeo.rotateX(-Math.PI/2);var tm=new THREE.Mesh(tgeo,new THREE.MeshStandardMaterial({color:it.color,roughness:0.9}));tm.position.set(it.position[0],it.position[1],it.position[2]);tm.scale.set(it.scale[0],it.scale[1],it.scale[2]);tm.receiveShadow=true;if(it.visible===false)tm.visible=false;scene.add(tm);terrains.push({x:tm.position.x,y:tm.position.y,z:tm.position.z,sx:tm.scale.x,sy:tm.scale.y,sz:tm.scale.z,seg:32,heights:th});tm.userData.clickName=it.name;clickTargets.push(tm);if(it.sound)soundObjs.push({o:tm,name:it.name,preset:it.sound.preset||"coin",trigger:migTrigger(it.sound.trigger),cd:0});registerObjCode(it,tm);return;}',
+        'else if(it.type==="enemy"){var eg=new THREE.Group();eg.position.set(it.position[0],it.position[1],it.position[2]);eg.scale.set(it.scale[0],it.scale[1],it.scale[2]);var ehp=(it.enemy&&it.enemy.hp!==undefined)?Math.max(1,Math.round(it.enemy.hp)):100;eg.hp=ehp;eg.maxHp=ehp;if(it.visible===false)eg.visible=false;scene.add(eg);var een={mesh:eg,speed:(it.enemy&&it.enemy.speed!==undefined)?it.enemy.speed:2,sight:(it.enemy&&it.enemy.sight)||"look",state:"wander",unseen:0,wTimer:0,wAngle:Math.random()*Math.PI*2,yOff:(it.enemy&&it.enemy.glbData)?0:0.6*(it.scale[1]||1),touchR:0.6,proj:(it.enemy&&it.enemy.projectile)||"none",shootCd:0,lastHit:-10,maxHp:ehp,showBar:!!(it.enemy&&it.enemy.showHealthBar),dmgCd:-10,barCv:null,barCtx:null,barTex:null,barSpr:null,barRatio:-1};enemies.push(een);if(een.showBar){een.barCv=document.createElement("canvas");een.barCv.width=128;een.barCv.height=16;een.barCtx=een.barCv.getContext("2d");een.barTex=new THREE.CanvasTexture(een.barCv);een.barSpr=new THREE.Sprite(new THREE.SpriteMaterial({map:een.barTex,transparent:true}));een.barSpr.scale.set(1.5,0.19,1);een.barSpr.position.y=1.55;eg.add(een.barSpr);}if(it.enemy&&it.enemy.glbData){(function(){var s=atob(it.enemy.glbData);var u=new Uint8Array(s.length);for(var i=0;i<s.length;i++)u[i]=s.charCodeAt(i);new THREE.GLTFLoader().parse(u.buffer,"",function(g){var m=g.scene;var bb=new THREE.Box3().setFromObject(m);var sz=new THREE.Vector3();bb.getSize(sz);var sc=1.2/Math.max(0.01,sz.y);m.scale.set(sc,sc,sc);var bb2=new THREE.Box3().setFromObject(m);m.position.y-=bb2.min.y;m.traverse(function(n){if(n.isMesh)n.castShadow=true;});if(it.centerShift){m.children.forEach(function(ch){ch.position.x+=it.centerShift[0];ch.position.y+=it.centerShift[1];ch.position.z+=it.centerShift[2];});}eg.add(m);eg.updateMatrixWorld(true);var bb3=new THREE.Box3().setFromObject(m);een.yOff=eg.position.y-bb3.min.y;een.touchR=Math.max(0.6,Math.max(bb3.max.x-bb3.min.x,bb3.max.z-bb3.min.z)/2);});})();}else{var eb=new THREE.Mesh(new THREE.SphereGeometry(0.6,24,18),new THREE.MeshStandardMaterial({color:it.color,roughness:0.4}));eb.position.y=0.6;eg.add(eb);[-0.22,0.22].forEach(function(ex){var eye=new THREE.Mesh(new THREE.SphereGeometry(0.13,12,12),new THREE.MeshStandardMaterial({color:0xffffff}));eye.position.set(ex,0.77,0.48);eg.add(eye);var pup=new THREE.Mesh(new THREE.SphereGeometry(0.06,10,10),new THREE.MeshStandardMaterial({color:0x111111}));pup.position.set(ex,0.77,0.59);eg.add(pup);});}if(een.proj==="gun"){var gg=new THREE.Group();var gp=new THREE.Mesh(new THREE.BoxGeometry(0.12,0.28,0.12),new THREE.MeshStandardMaterial({color:0x1a1a1a,roughness:0.5}));gp.position.set(0.35,0.65,0.45);gg.add(gp);var gb=new THREE.Mesh(new THREE.CylinderGeometry(0.045,0.045,0.5,10),new THREE.MeshStandardMaterial({color:0x222222,roughness:0.35}));gb.rotation.x=Math.PI/2;gb.position.set(0.35,0.8,0.75);gg.add(gb);eg.add(gg);}eg.userData.clickName=it.name;clickTargets.push(eg);registerExtras(it,eg);return;}',
         'else if(it.type==="glb"&&it.glbData){',
         '(function(){var s=atob(it.glbData);var u=new Uint8Array(s.length);for(var i=0;i<s.length;i++)u[i]=s.charCodeAt(i);',
         'new THREE.GLTFLoader().parse(u.buffer,"",function(g){var m=g.scene;',
         'm.position.set(it.position[0],it.position[1],it.position[2]);',
         'm.rotation.set(it.rotation[0],it.rotation[1],it.rotation[2]);',
         'm.scale.set(it.scale[0],it.scale[1],it.scale[2]);',
+        'if(it.centerShift){m.children.forEach(function(ch){ch.position.x+=it.centerShift[0];ch.position.y+=it.centerShift[1];ch.position.z+=it.centerShift[2];});}',
         'm.traverse(function(n){if(n.isMesh)n.castShadow=true;});',
-        'scene.add(m);if(it.isPlayer){playerMesh=m;setPlayerDims(m);camHeight=(it.camHeight!==undefined)?it.camHeight:0;}else if(!it.dynamic)regBox(m);m.userData.clickName=it.name;clickTargets.push(m);registerExtras(it,m);regGrab(m,it);});})();return;}',
+        'scene.add(m);if(it.visible===false)m.visible=false;if(it.isPlayer){playerMesh=m;setPlayerDims(m);camHeight=(it.camHeight!==undefined)?it.camHeight:0;playerHidden=(it.visible===false);loadCamObj(it);}else if(!it.dynamic)regBox(m);m.userData.clickName=it.name;clickTargets.push(m);registerExtras(it,m);regGrab(m,it);});})();return;}',
         'if(!o)return;',
         'o.position.set(it.position[0],it.position[1],it.position[2]);',
         'o.rotation.set(it.rotation[0],it.rotation[1],it.rotation[2]);',
         'o.scale.set(it.scale[0],it.scale[1],it.scale[2]);',
         'o.castShadow=true;o.receiveShadow=true;',
         'if(it.pixelArt){if(it.type==="cube"){var _fa=it.pixelArt.faceArt||null;var _pf=_fa?["right","left","top","bottom","front","back"].filter(function(fn){return _fa[fn];}):((it.pixelArt.faces&&it.pixelArt.faces.length)?it.pixelArt.faces:["right","left","top","bottom","front","back"]);var _fo=["right","left","top","bottom","front","back"];var _tx=pixelTex(it.pixelArt);o.material=_fo.map(function(fn){var _ft=(_fa&&_fa[fn])?pixelTex(_fa[fn]):_tx;return _pf.indexOf(fn)!==-1?new THREE.MeshStandardMaterial({map:_ft,transparent:true,roughness:.7,color:0xffffff}):new THREE.MeshStandardMaterial({color:it.color,roughness:.7});});}else{o.material.map=pixelTex(it.pixelArt);o.material.color.set(0xffffff);o.material.transparent=true;o.material.needsUpdate=true;}}',
-        'scene.add(o);if(it.isPlayer){playerMesh=o;setPlayerDims(o);camHeight=(it.camHeight!==undefined)?it.camHeight:0;}else if(!it.dynamic)regBox(o);o.userData.clickName=it.name;clickTargets.push(o);registerExtras(it,o);regGrab(o,it);});',
+        'scene.add(o);if(it.visible===false)o.visible=false;if(it.isPlayer){playerMesh=o;setPlayerDims(o);camHeight=(it.camHeight!==undefined)?it.camHeight:0;playerHidden=(it.visible===false);loadCamObj(it);}else if(!it.dynamic)regBox(o);o.userData.clickName=it.name;clickTargets.push(o);registerExtras(it,o);regGrab(o,it);});',
         'var R=0.45;if(playerMesh)R=Math.max(0.45,playerHalfD);',
         'var pos=new THREE.Vector3(0,0,6),vel=new THREE.Vector3(),yaw=0,pitch=0,grounded=false,orbYaw=0,orbPitch=0,orbDist=5;',
         '(function(){var sx=0,sz=6,sy=0.1;if(spawnPt){sx=spawnPt.position[0];sz=spawnPt.position[2];sy=spawnPt.position[1];yaw=spawnPt.rotation[1]||0;}else if(playerMesh){sx=playerMesh.position.x;sz=playerMesh.position.z;sy=playerMesh.position.y-playerFootOff;}var g=supportAt(sx,sz,sy+1.0);pos.set(sx,Math.max(sy+0.05,g),sz);spawnX=sx;spawnY=pos.y;spawnZ=sz;spawnYaw=yaw;orbYaw=yaw;})();',
@@ -1525,7 +1586,7 @@
         'document.addEventListener("pointerlockchange",function(){locked=document.pointerLockElement===renderer.domElement;if(!locked&&grabHeld)dropHeld();document.getElementById("ui").style.display=locked?"none":"flex";});',
         'document.addEventListener("pointerlockerror",function(){document.getElementById("ui").style.display="flex";});',
         'document.addEventListener("mousemove",function(e){if(!locked)return;if(playerMesh){orbYaw-=e.movementX*0.0022;orbPitch-=e.movementY*0.0022;orbPitch=Math.max(-0.4,Math.min(0.4,orbPitch));}else{yaw-=e.movementX*0.0022;pitch-=e.movementY*0.0022;pitch=Math.max(-1.45,Math.min(1.45,pitch));}});',
-        'document.addEventListener("wheel",function(e){if(!playerMesh)return;orbDist=Math.max(1,Math.min(10,orbDist+e.deltaY*0.01));});',
+        'document.addEventListener("wheel",function(e){if(!playerMesh)return;orbDist=Math.max(0,Math.min(10,orbDist+e.deltaY*0.01));});',
         'addEventListener("resize",function(){camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});',
         'function supportAtR(x,z,fy,rad){var s=0;for(var i=0;i<solids.length;i++){var b=solids[i];if(x>b.x0-rad&&x<b.x1+rad&&z>b.z0-rad&&z<b.z1+rad&&b.y1<=fy+0.55&&b.y1>s)s=b.y1;}for(var j=0;j<terrains.length;j++){var th=terrainHeightAt(terrains[j],x,z);if(th!==null&&th<=fy+0.55&&th>s)s=th;}return s;}',
         'function supportAt(x,z,fy){return supportAtR(x,z,fy,R);}',
@@ -1587,7 +1648,7 @@
         'function mpCreateClicked(){var code=mpGenCode();var ci=document.getElementById("mpcodein");if(ci)ci.value=code;mpJoinRoom(code);}',
         'function mpLeaveClicked(){mpLeaveRoom(false);}',
         '(function tick(){requestAnimationFrame(tick);var dt=Math.min(pclock.getDelta(),0.05);',
-        'gameTime+=dt;mpTick();updateAnims();updateParticles(dt);updateDynamics(dt);updateEnemies(dt);updateSoundCollide(dt);updateObjCollide();',
+        'gameTime+=dt;mpTick();updateAnims();updateParticles(dt);updateDynamics(dt);updateEnemies(dt);updateProjectiles(dt);updateSoundCollide(dt);updateObjCollide();',
         'if(locked){',
         'camera.quaternion.setFromEuler(new THREE.Euler(pitch,yaw,0,"YXZ"));',
         'var myaw=playerMesh?orbYaw:yaw;fwd.set(-Math.sin(myaw),0,-Math.cos(myaw));rgt.set(Math.cos(myaw),0,-Math.sin(myaw));',
@@ -1609,7 +1670,7 @@
         'var sdx=pos.x-lastPX,sdz=pos.z-lastPZ;lastPX=pos.x;lastPZ=pos.z;stepAcc+=Math.sqrt(sdx*sdx+sdz*sdz);',
         'if(stepAcc>=2){stepCount+=Math.floor(stepAcc/2);stepAcc=stepAcc%2;var sc=document.getElementById("stepcount");if(sc)sc.textContent=stepCount;}',
         'if(playerMesh){playerMesh.position.set(pos.x,pos.y+playerFootOff,pos.z);playerMesh.rotation.y=orbYaw;}',
-        'if(playerMesh){camera.position.set(pos.x+Math.sin(orbYaw)*orbDist,pos.y+playerEye+0.3+camHeight,pos.z+Math.cos(orbYaw)*orbDist);camera.quaternion.setFromEuler(new THREE.Euler(orbPitch,orbYaw,0,"YXZ"));}else{camera.position.set(pos.x,pos.y+1.65,pos.z);}',
+        'if(playerMesh){var vYaw=orbYaw+camRot[1],vPitch=orbPitch+camRot[0];var bx=pos.x+camOff[0]*Math.cos(orbYaw)+camOff[2]*Math.sin(orbYaw),bz=pos.z-camOff[0]*Math.sin(orbYaw)+camOff[2]*Math.cos(orbYaw),by=pos.y+camOff[1]+camHeight;camera.position.set(bx+Math.sin(vYaw)*orbDist,by,bz+Math.cos(vYaw)*orbDist);camera.quaternion.setFromEuler(new THREE.Euler(vPitch,vYaw,camRot[2],"YXZ"));playerMesh.visible=!playerHidden&&Math.hypot(camera.position.x-pos.x,camera.position.z-pos.z)>=0.8;}else{camera.position.set(pos.x,pos.y+1.65,pos.z);}',
         'if(locked&&grabHeld){camera.getWorldDirection(grabDir);grabHeld.o.position.set(camera.position.x+grabDir.x*2,camera.position.y+grabDir.y*2,camera.position.z+grabDir.z*2);}',
         'renderer.render(scene,camera);})();',
         '<\/script>',
@@ -1701,7 +1762,7 @@
       if (!selectedObject) return;
       gameObjects.forEach(o => { o.userData.isPlayer = false; });
       selectedObject.userData.isPlayer = true;
-      refreshPlayerCamIcon();
+      refreshPlayerCamera();
       updateHierarchy();
       updateInspector();
     }
@@ -1709,15 +1770,15 @@
     function unsetPlayer() {
       if (!selectedObject) return;
       selectedObject.userData.isPlayer = false;
-      refreshPlayerCamIcon();
+      refreshPlayerCamera();
       updateHierarchy();
       updateInspector();
     }
 
-    // Editor-only camera icon: a little 📷 badge shown in the middle of
-    // the player object in the editor viewport, so you can see where the
-    // camera sits. It is never serialized and never reaches Preview or
-    // exported games (the export template has no such code).
+    // Editor-only camera icon: a little 📷 badge. It used to sit on the
+    // player object; it is now the visual marker for the real Camera
+    // object (see refreshPlayerCamera below). It is never serialized and
+    // never reaches Preview or exported games.
     function makePlayerCamIcon() {
       var cv = document.createElement('canvas');
       cv.width = 256; cv.height = 256;
@@ -1737,25 +1798,504 @@
       return spr;
     }
 
-    function refreshPlayerCamIcon() {
-      // Remove any old icon by scanning children for the marker (not the
-      // saved reference), so a cloned player never keeps a stale badge.
+    // ---- Camera as a real object ----
+    // When a player is set, a top-level "Camera" object is linked to it.
+    // Its stored position is an OFFSET from the player (item.camObj.pos)
+    // and its rotation ADDS to the view (item.camObj.rot). Moving the
+    // player moves the camera with it; dragging the camera converts its
+    // new world spot back into an offset. The 📷 sprite is the camera
+    // object's marker in the editor. The camera object is editor-only:
+    // serializeScene filters it out; only the player's camObj is saved.
+    // Bounding box of an object, ignoring the 📷 editor icon sprite and
+    // an enemy's gun (neither is part of the model's own shape).
+    function meshBBox(obj) {
+      var box = new THREE.Box3();
+      var any = false;
+      (obj.children || []).forEach(function (ch) {
+        if (ch.userData && (ch.userData.isPlayerCamIcon || ch.userData.isEnemyGun)) return;
+        var b = new THREE.Box3().setFromObject(ch);
+        if (b.isEmpty()) return;
+        if (!any) { box.copy(b); any = true; } else box.union(b);
+      });
+      if (!any) box.setFromObject(obj);
+      return box;
+    }
+
+    // Eye height / foot offset of a player object, from its geometry.
+    function playerEyeInfo(mesh) {
+      var b = meshBBox(mesh);
+      var s = new THREE.Vector3(); b.getSize(s);
+      return { footOff: mesh.position.y - b.min.y, eye: Math.max(0.35, s.y * 0.92) + 0.3 };
+    }
+
+    function camWorldPosFromOffset(player, camObj) {
+      var info = playerEyeInfo(player);
+      var p = camObj.pos, ry = player.rotation.y;
+      var c = Math.cos(ry), s = Math.sin(ry);
+      return {
+        x: player.position.x + p[0] * c + p[2] * s,
+        y: player.position.y - info.footOff + p[1],
+        z: player.position.z - p[0] * s + p[2] * c
+      };
+    }
+
+    function camOffsetFromWorld(player, worldPos) {
+      var info = playerEyeInfo(player);
+      var ry = player.rotation.y;
+      var c = Math.cos(ry), s = Math.sin(ry);
+      var dx = worldPos.x - player.position.x, dy = worldPos.y - (player.position.y - info.footOff), dz = worldPos.z - player.position.z;
+      return [dx * c - dz * s, dy, dx * s + dz * c];
+    }
+
+    function camRotFromWorld(player, camObjMesh) {
+      var ry = player.rotation.y;
+      return [
+        camObjMesh.rotation.x,
+        camObjMesh.rotation.y - ry,
+        camObjMesh.rotation.z
+      ];
+    }
+
+    function defaultCamObj(player) {
+      var info = playerEyeInfo(player);
+      return { pos: [0, info.eye, 0], rot: [0, 0, 0] };
+    }
+
+    function findPlayerMesh() {
+      var p = null;
+      gameObjects.forEach(function (o) { if (o.userData && o.userData.isPlayer) p = o; });
+      return p;
+    }
+
+    function findPlayerCamera() {
+      var c = null;
+      gameObjects.forEach(function (o) { if (o.userData && o.userData.isPlayerCamera) c = o; });
+      return c;
+    }
+
+    // Put the Camera object where the player's stored offset says it is.
+    function syncPlayerCamera() {
+      var player = findPlayerMesh(), cam = findPlayerCamera();
+      if (!player || !cam) return;
+      if (!player.userData.camObj || !player.userData.camObj.pos) player.userData.camObj = defaultCamObj(player);
+      var w = camWorldPosFromOffset(player, player.userData.camObj);
+      cam.position.set(w.x, w.y, w.z);
+      cam.rotation.set(player.userData.camObj.rot[0], player.rotation.y + player.userData.camObj.rot[1], player.userData.camObj.rot[2]);
+    }
+
+    function refreshPlayerCamera() {
+      // Drop any camera object whose player is gone (or was never the
+      // player), and any stale 📷 badge left on a player from the old build.
+      for (var i = gameObjects.length - 1; i >= 0; i--) {
+        var o = gameObjects[i];
+        if (o.userData && o.userData.isPlayerCamera) {
+          if (o.userData.playerRef && o.userData.playerRef.userData && o.userData.playerRef.userData.isPlayer) continue;
+          scene.remove(o); gameObjects.splice(i, 1);
+        }
+      }
       gameObjects.forEach(function (o) {
-        for (var i = o.children.length - 1; i >= 0; i--) {
-          var c = o.children[i];
-          if (c.userData && c.userData.isPlayerCamIcon) o.remove(c);
+        for (var j = o.children.length - 1; j >= 0; j--) {
+          if (o.children[j].userData && o.children[j].userData.isPlayerCamIcon) o.remove(o.children[j]);
         }
         o.userData.playerCamIcon = null;
       });
-      var p = null;
-      gameObjects.forEach(function (o) { if (o.userData && o.userData.isPlayer) p = o; });
-      if (!p) return;
-      // A child of the player at its local middle (0,0,0): it travels and
-      // turns with the object, and depthTest:false keeps it visible even
-      // though it sits inside the object's mesh.
-      var icon = makePlayerCamIcon();
-      p.add(icon);
-      p.userData.playerCamIcon = icon;
+      var player = findPlayerMesh();
+      if (!player) return;
+      var cam = findPlayerCamera();
+      if (!cam) {
+        cam = new THREE.Group();
+        cam.name = 'Camera';
+        cam.userData.primitiveType = 'camera';
+        cam.userData.isPlayerCamera = true;
+        cam.userData.playerRef = player;
+        var icon = makePlayerCamIcon();
+        cam.add(icon);
+        scene.add(cam);
+        gameObjects.push(cam);
+      }
+      cam.userData.playerRef = player;
+      if (!player.userData.camObj || !player.userData.camObj.pos) player.userData.camObj = defaultCamObj(player);
+      syncPlayerCamera();
+      updateHierarchy();
+    }
+
+    // Back-compat alias (the old camera-icon build used this name).
+    function refreshPlayerCamIcon() { refreshPlayerCamera(); }
+
+    function resetPlayerCamera() {
+      var player = findPlayerMesh();
+      if (!player) return;
+      player.userData.camObj = undefined;
+      refreshPlayerCamera();
+      updateInspector();
+    }
+
+    // Called after any transform edit (gizmo drag or inspector input):
+    // if the Camera object moved, store its new offset/rotation; if the
+    // player moved, the camera follows it.
+    function syncCamAfterTransform() {
+      var player = findPlayerMesh(), cam = findPlayerCamera();
+      if (!player || !cam) return;
+      if (selectedObject === cam) {
+        if (!player.userData.camObj) player.userData.camObj = defaultCamObj(player);
+        player.userData.camObj.pos = camOffsetFromWorld(player, cam.position);
+        player.userData.camObj.rot = camRotFromWorld(player, cam);
+        if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
+      } else if (selectedObject === player) {
+        syncPlayerCamera();
+      }
+    }
+
+    // ---- GLB enemies ----
+    // The red-sphere look, extracted so Set Enemy / Remove model can
+    // rebuild it. The body color comes from the object's live body
+    // material when it exists (so a recolored enemy stays recolored),
+    // else the saved enemyColor, else red.
+    function buildDefaultEnemyLook(mesh) {
+      var color = 0xcc2222;
+      if (mesh.children[0] && mesh.children[0].material && mesh.children[0].material.color) color = mesh.children[0].material.color.getHex();
+      else if (mesh.userData.enemyColor !== undefined) color = mesh.userData.enemyColor;
+      while (mesh.children.length) mesh.remove(mesh.children[0]);
+      var body = new THREE.Mesh(new THREE.SphereGeometry(0.6, 24, 18), new THREE.MeshStandardMaterial({ color: color, roughness: 0.4 }));
+      body.position.y = 0.6;
+      mesh.add(body);
+      var eyeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2 });
+      var pupMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.2 });
+      [-0.22, 0.22].forEach(function (ex) {
+        var eye = new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 12), eyeMat);
+        eye.position.set(ex, 0.77, 0.48);
+        mesh.add(eye);
+        var pup = new THREE.Mesh(new THREE.SphereGeometry(0.06, 10, 10), pupMat);
+        pup.position.set(ex, 0.77, 0.59);
+        mesh.add(pup);
+      });
+      refreshEnemyGun(mesh);
+    }
+
+    // The gun an enemy visibly holds when its projectile type is Gun.
+    // It is a child of the enemy group (not the model), points along the
+    // group's +Z (the enemy already faces the player while chasing), and
+    // is rebuilt whenever the look or the projectile type changes.
+    function buildEnemyGun() {
+      var g = new THREE.Group();
+      var grip = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.28, 0.12), new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.5 }));
+      grip.position.set(0.35, 0.65, 0.45);
+      g.add(grip);
+      var barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.5, 10), new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.35 }));
+      barrel.rotation.x = Math.PI / 2;
+      barrel.position.set(0.35, 0.8, 0.75);
+      g.add(barrel);
+      g.userData.isEnemyGun = true;
+      return g;
+    }
+
+    function refreshEnemyGun(mesh) {
+      if (!mesh || !mesh.userData.enemy) return;
+      for (var i = mesh.children.length - 1; i >= 0; i--) {
+        if (mesh.children[i].userData && mesh.children[i].userData.isEnemyGun) mesh.remove(mesh.children[i]);
+      }
+      if (mesh.userData.enemy.projectile === 'gun') mesh.add(buildEnemyGun());
+    }
+
+    function mountEnemyGLB(mesh, gltf) {
+      // Swap the enemy's visual to the GLB model, normalized to the red
+      // sphere's size (~1.2 tall, standing on the ground).
+      while (mesh.children.length) mesh.remove(mesh.children[0]);
+      var model = gltf.scene;
+      var bbox = new THREE.Box3().setFromObject(model);
+      var size = new THREE.Vector3(); bbox.getSize(size);
+      var s = 1.2 / Math.max(0.01, size.y);
+      model.scale.set(s, s, s);
+      var bbox2 = new THREE.Box3().setFromObject(model);
+      model.position.y -= bbox2.min.y;
+      model.traverse(function (n) { if (n.isMesh) n.castShadow = true; });
+      mesh.add(model);
+      applyStoredCenterShift(mesh);
+      refreshEnemyGun(mesh);
+    }
+
+    function applyEnemyModel(mesh) {
+      // (Re)build an enemy's visual: the GLB model if one is set, else
+      // the red sphere. A parse failure leaves the current look alone.
+      if (!mesh || !mesh.userData.enemy) return;
+      var glb = mesh.userData.enemy.glbData;
+      if (!glb) { buildDefaultEnemyLook(mesh); return; }
+      try {
+        var buf = base64ToArrayBuffer(glb);
+        new THREE.GLTFLoader().parse(buf, '', function (gltf) {
+          if (!mesh.userData.enemy || mesh.userData.enemy.glbData !== glb) return;
+          mountEnemyGLB(mesh, gltf);
+        }, function () {
+          showEnginePopup('Could not load that enemy .glb file.');
+        });
+      } catch (err) {
+        showEnginePopup('Could not load that enemy .glb file.');
+      }
+    }
+
+    function importEnemyGLBFile(event) {
+      var file = event.target.files[0];
+      event.target.value = '';
+      var target = selectedObject;
+      if (!file || !target || !target.userData.enemy) return;
+      var reader = new FileReader();
+      reader.onload = function (e) {
+        var buf = e.target.result;
+        try {
+          new THREE.GLTFLoader().parse(buf, '', function (gltf) {
+            // A new model means a new bounding box: drop any old center
+            // shift, then mount it and save the base64.
+            target.userData.enemy.glbData = arrayBufferToBase64(buf);
+            delete target.userData.centerShift;
+            delete target.userData.centerPosDelta;
+            mountEnemyGLB(target, gltf);
+            updateInspector();
+            if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
+          }, function () {
+            showEnginePopup('Could not load that .glb file.');
+          });
+        } catch (err) {
+          showEnginePopup('Could not load that .glb file.');
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function removeEnemyModel() {
+      if (!selectedObject || !selectedObject.userData.enemy) return;
+      delete selectedObject.userData.enemy.glbData;
+      delete selectedObject.userData.centerShift;
+      delete selectedObject.userData.centerPosDelta;
+      buildDefaultEnemyLook(selectedObject);
+      updateInspector();
+      if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
+    }
+
+    function setEnemyProjectile(val) {
+      if (!selectedObject || !selectedObject.userData.enemy) return;
+      if (['none', 'fireball', 'cork', 'gun'].indexOf(val) === -1) val = 'none';
+      selectedObject.userData.enemy.projectile = val;
+      refreshEnemyGun(selectedObject);
+      updateInspector();
+      if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
+    }
+
+    // ---- Set Center (GLB pivot) ----
+    // A GLB model's pivot sits where its author put it — for an avatar
+    // that is usually the feet. Set Center moves the pivot to the middle
+    // of the model's bounding box: the inner meshes shift so the box
+    // center lands on the object's position, and the object origin moves
+    // to the box center so the model itself does not jump. The mesh shift
+    // is saved as item.centerShift; the origin move as
+    // item.centerPosDelta. Old saves without them behave exactly as
+    // before.
+    function isGLBBacked(obj) {
+      if (!obj || !obj.userData) return false;
+      if (obj.userData.primitiveType === 'glb') return true;
+      if (obj.userData.primitiveType === 'enemy' && obj.userData.enemy && obj.userData.enemy.glbData) return true;
+      return false;
+    }
+
+    function computeCenterShift(obj) {
+      obj.updateWorldMatrix(true, true);
+      var bb = meshBBox(obj);
+      if (bb.isEmpty()) return null;
+      var wc = new THREE.Vector3(); bb.getCenter(wc);
+      var local = obj.worldToLocal(wc.clone());
+      var shift = [-local.x, -local.y, -local.z];
+      var newPos = obj.parent ? obj.parent.worldToLocal(wc.clone()) : wc.clone();
+      var originDelta = [newPos.x - obj.position.x, newPos.y - obj.position.y, newPos.z - obj.position.z];
+      return { shift: shift, originDelta: originDelta };
+    }
+
+    function setCenter() {
+      if (!selectedObject || !isGLBBacked(selectedObject)) return;
+      var res = computeCenterShift(selectedObject);
+      if (!res) return;
+      if (Math.abs(res.shift[0]) < 0.001 && Math.abs(res.shift[1]) < 0.001 && Math.abs(res.shift[2]) < 0.001) return;
+      selectedObject.children.slice().forEach(function (ch) {
+        if (ch.userData && ch.userData.isPlayerCamIcon) return;
+        ch.position.x += res.shift[0]; ch.position.y += res.shift[1]; ch.position.z += res.shift[2];
+      });
+      selectedObject.position.x += res.originDelta[0];
+      selectedObject.position.y += res.originDelta[1];
+      selectedObject.position.z += res.originDelta[2];
+      selectedObject.userData.centerShift = res.shift.slice();
+      selectedObject.userData.centerPosDelta = res.originDelta.slice();
+      updateInspectorValues();
+      updateInspector();
+      if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
+    }
+
+    function resetCenter() {
+      if (!selectedObject || !selectedObject.userData.centerShift) return;
+      var s = selectedObject.userData.centerShift;
+      var d = selectedObject.userData.centerPosDelta || [0, 0, 0];
+      selectedObject.children.slice().forEach(function (ch) {
+        if (ch.userData && ch.userData.isPlayerCamIcon) return;
+        ch.position.x -= s[0]; ch.position.y -= s[1]; ch.position.z -= s[2];
+      });
+      selectedObject.position.x -= d[0];
+      selectedObject.position.y -= d[1];
+      selectedObject.position.z -= d[2];
+      delete selectedObject.userData.centerShift;
+      delete selectedObject.userData.centerPosDelta;
+      updateInspectorValues();
+      updateInspector();
+      if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
+    }
+
+    // Load path: re-apply a saved center shift to a freshly parsed model.
+    // The saved position already includes the pivot move, so the origin
+    // is NOT moved here.
+    function applyStoredCenterShift(obj) {
+      var s = obj.userData && obj.userData.centerShift;
+      if (!s) return;
+      obj.children.slice().forEach(function (ch) {
+        if (ch.userData && ch.userData.isPlayerCamIcon) return;
+        ch.position.x += s[0]; ch.position.y += s[1]; ch.position.z += s[2];
+      });
+    }
+
+    // ---- Visible (per-object) ----
+    // Visibility is rendering-only: a hidden light still lights the
+    // scene, a hidden enemy still chases and damages, a hidden solid
+    // still blocks movement. In the editor a hidden object is ghosted
+    // (faded) so it can still be found and selected; in Preview and
+    // exports it is fully hidden. Saved as item.visible (default true).
+    function applyEditorVisibility(obj) {
+      var hidden = obj.userData && obj.userData.visible === false;
+      obj.traverse(function (n) {
+        if (!n.isMesh && !n.isSprite && !n.isPoints) return;
+        var mats = Array.isArray(n.material) ? n.material : [n.material];
+        mats.forEach(function (mat) {
+          if (!mat) return;
+          if (hidden) {
+            if (mat.userData.savedOpacity === undefined) {
+              mat.userData.savedOpacity = mat.opacity;
+              mat.userData.savedTransparent = mat.transparent;
+            }
+            mat.transparent = true;
+            mat.opacity = 0.25;
+          } else if (mat.userData.savedOpacity !== undefined) {
+            mat.opacity = mat.userData.savedOpacity;
+            mat.transparent = mat.userData.savedTransparent;
+            delete mat.userData.savedOpacity;
+            delete mat.userData.savedTransparent;
+          }
+        });
+      });
+    }
+
+    function setObjectVisible(v) {
+      if (!selectedObject) return;
+      selectedObject.userData.visible = !!v;
+      applyEditorVisibility(selectedObject);
+      updateHierarchy();
+      if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
+    }
+
+    // ---- Multi-select + Merge ----
+    var multiSelected = []; // extra objects selected with shift-click
+    var MERGEABLE_TYPES = ['cube', 'sphere', 'glb', 'pixelart', 'particle', 'pointlight', 'spotlight'];
+
+    function getSelectionList() {
+      var list = [];
+      if (selectedObject) list.push(selectedObject);
+      multiSelected.forEach(function (o) { if (list.indexOf(o) === -1) list.push(o); });
+      return list;
+    }
+
+    function refreshSelectionUI() {
+      if (selectedObject) transformGizmo.attach(selectedObject);
+      else transformGizmo.detach();
+      updateHierarchy();
+      updateInspector();
+    }
+
+    function toggleMultiSelect(obj) {
+      if (obj === selectedObject) {
+        if (multiSelected.length) {
+          selectedObject = multiSelected[0];
+          multiSelected.splice(0, 1);
+        } else {
+          selectedObject = null;
+        }
+      } else {
+        var i = multiSelected.indexOf(obj);
+        if (i > -1) multiSelected.splice(i, 1);
+        else if (selectedObject) multiSelected.push(obj);
+        else selectedObject = obj;
+      }
+      refreshSelectionUI();
+    }
+
+    function mergeSelected() {
+      var parts = getSelectionList();
+      if (parts.length < 2) { showEnginePopup('Select 2 or more objects first (shift-click to add more).'); return; }
+      for (var i = 0; i < parts.length; i++) {
+        var p = parts[i];
+        if (p.userData.isPlayer || p.userData.primitiveType === 'camera') { showEnginePopup('The player and the Camera object cannot be merged.'); return; }
+        if (MERGEABLE_TYPES.indexOf(p.userData.primitiveType) === -1) { showEnginePopup('"' + (p.name || p.userData.primitiveType) + '" cannot be merged — only cubes, spheres, GLB models, pixel art, particles and lights merge.'); return; }
+      }
+      // One hierarchy entry, one group that moves/rotates/scales as one.
+      // Each part keeps its relative position/rotation/scale inside it.
+      var cx = 0, cy = 0, cz = 0;
+      parts.forEach(function (p) { cx += p.position.x; cy += p.position.y; cz += p.position.z; });
+      cx /= parts.length; cy /= parts.length; cz /= parts.length;
+      var group = new THREE.Group();
+      group.name = 'Merged_' + (gameObjects.length + 1);
+      group.position.set(cx, cy, cz);
+      group.userData.primitiveType = 'merged';
+      scene.add(group);
+      gameObjects.push(group);
+      var partItems = [];
+      parts.forEach(function (p) {
+        group.attach(p);
+        var pi = gameObjects.indexOf(p);
+        if (pi > -1) gameObjects.splice(pi, 1);
+        partItems.push(serializeObject(p));
+      });
+      group.userData.groupParts = partItems;
+      multiSelected = [];
+      selectObject(group);
+      updateHierarchy();
+      if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
+    }
+
+    // Exports (Preview / Download HTML) flatten merged groups into their
+    // parts with world-space transforms, so the export template needs no
+    // merged-group support. The .ajg save keeps the merged group as one
+    // item with groupParts. Per-object code stays on the parts that had
+    // it; code added to the merged object itself runs on its first part.
+    function flattenSceneForExport() {
+      var out = [];
+      gameObjects.filter(function (obj) { return !(obj.userData && obj.userData.primitiveType === 'camera'); }).forEach(function (obj) {
+        if (obj.userData && obj.userData.primitiveType === 'merged' && obj.userData.groupParts) {
+          var firstCode = obj.userData.objCode;
+          obj.children.slice().forEach(function (part, idx) {
+            var item = serializeObject(part);
+            var wp = new THREE.Vector3(), wq = new THREE.Quaternion(), ws = new THREE.Vector3();
+            part.updateWorldMatrix(true, false);
+            part.matrixWorld.decompose(wp, wq, ws);
+            var eu = new THREE.Euler().setFromQuaternion(wq, 'XYZ');
+            item.position = [wp.x, wp.y, wp.z];
+            item.rotation = [eu.x, eu.y, eu.z];
+            item.scale = [ws.x, ws.y, ws.z];
+            if (idx === 0 && firstCode) {
+              var oc = {};
+              ['onStart', 'onUpdate', 'onClick', 'onPlayerCollide', 'onEnemyCollide', 'onObjectCollide'].forEach(function (ev) {
+                if (firstCode[ev]) oc[ev] = firstCode[ev];
+              });
+              if (Object.keys(oc).length) item.code = oc;
+            }
+            out.push(item);
+          });
+        } else {
+          out.push(serializeObject(obj));
+        }
+      });
+      return out;
     }
 
     function cloneSelected() {
@@ -1775,7 +2315,7 @@
       gameObjects.push(clone);
       selectObject(clone);
       // A cloned player must not keep the camera badge (it is not the player).
-      refreshPlayerCamIcon();
+      refreshPlayerCamera();
       updateHierarchy();
       if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
     }
@@ -1783,10 +2323,24 @@
     function deleteSelected() {
       if (!selectedObject) return;
       transformGizmo.detach();
+      var wasCamera = !!(selectedObject.userData && selectedObject.userData.isPlayerCamera);
+      var wasPlayer = !!(selectedObject.userData && selectedObject.userData.isPlayer);
       scene.remove(selectedObject);
       const idx = gameObjects.indexOf(selectedObject);
       if (idx > -1) gameObjects.splice(idx, 1);
       selectedObject = null;
+      multiSelected = [];
+      if (wasPlayer) {
+        // Removing the player removes its camera object too.
+        for (var i = gameObjects.length - 1; i >= 0; i--) {
+          if (gameObjects[i].userData && gameObjects[i].userData.isPlayerCamera) { scene.remove(gameObjects[i]); gameObjects.splice(i, 1); }
+        }
+      }
+      if (wasCamera) {
+        // Deleting the camera object resets it to its default spot.
+        gameObjects.forEach(function (o) { if (o.userData && o.userData.isPlayer) o.userData.camObj = undefined; });
+        refreshPlayerCamera();
+      }
       updateHierarchy();
       updateInspector();
       if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
@@ -1801,6 +2355,7 @@
 
     function selectObject(obj) {
       selectedObject = obj;
+      multiSelected = [];
       if (obj) transformGizmo.attach(obj);
       else transformGizmo.detach();
       updateHierarchy();
@@ -1812,8 +2367,8 @@
       list.innerHTML = '';
       gameObjects.forEach(obj => {
         const div = document.createElement('div');
-        div.className = `item ${selectedObject === obj ? 'selected' : ''}`;
-        
+        div.className = `item ${selectedObject === obj ? 'selected' : ''}${multiSelected.indexOf(obj) !== -1 ? ' multi' : ''}`;
+
         let icon = '📦';
         if (obj.userData.primitiveType === 'sphere') icon = '🔮';
         if (obj.userData.primitiveType === 'spawnpoint') icon = '📍';
@@ -1826,9 +2381,11 @@
         if (obj.userData.primitiveType === 'terrain') icon = '⛰';
         if (obj.userData.primitiveType === 'enemy') icon = '👾';
         if (obj.userData.primitiveType === 'menu') icon = '📋';
+        if (obj.userData.primitiveType === 'camera') icon = '🎥';
+        if (obj.userData.primitiveType === 'merged') icon = '🔗';
 
-        div.innerText = `${icon} ${obj.name}${obj.userData.isPlayer ? ' 🧍' : ''}`;
-        div.onclick = () => selectObject(obj);
+        div.innerText = `${icon} ${obj.name}${obj.userData.isPlayer ? ' 🧍' : ''}${obj.userData.visible === false ? ' (hidden)' : ''}`;
+        div.onclick = (e) => { if (e.shiftKey) toggleMultiSelect(obj); else { multiSelected = []; selectObject(obj); } };
         list.appendChild(div);
       });
     }
@@ -1866,12 +2423,13 @@
       ` : '';
       const isPlayer = !!(selectedObject.userData && selectedObject.userData.isPlayer);
       // Watches, spawn points, lights, particles, terrain, enemies and menus
-      // are not playable bodies, so they cannot be the player.
-      const canBePlayer = ['spawnpoint', 'watch', 'particle', 'pointlight', 'spotlight', 'terrain', 'enemy', 'menu'].indexOf(selectedObject.userData.primitiveType) === -1;
+      // are not playable bodies, so they cannot be the player. The Camera
+      // object is not a body either.
+      const canBePlayer = ['spawnpoint', 'watch', 'particle', 'pointlight', 'spotlight', 'terrain', 'enemy', 'menu', 'camera'].indexOf(selectedObject.userData.primitiveType) === -1;
       const camH = (selectedObject.userData.camHeight !== undefined) ? selectedObject.userData.camHeight : 0;
       const playerSection = canBePlayer ? `
         <div class="section-header">🧍 Player</div>
-        ${isPlayer ? '<div style="font-size:11px;color:#8b5cf6;margin-bottom:6px;">★ This object is the player. In Preview and downloads, the camera stays behind it — move the mouse to turn it, and pull the wheel back for third person.</div><div class="prop-row"><label>Camera height</label><input type="number" step="0.1" min="-1" max="2" value="' + camH + '" onchange="setPlayerCamHeight(parseFloat(this.value) || 0)" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;"></div><button class="btn btn-danger" onclick="unsetPlayer()">Remove as player</button>' : '<div style="font-size:11px;color:#888;margin-bottom:6px;">Hook this object up as the player. A camera will follow behind it in Preview and downloads — the mouse turns it, and the wheel pulls back for third person.</div><button class="btn btn-action" onclick="setSelectedAsPlayer()">Set as player</button>'}
+        ${isPlayer ? '<div style="font-size:11px;color:#8b5cf6;margin-bottom:6px;">★ This object is the player. In Preview and downloads, the camera stays behind it — move the mouse to turn it, and pull the wheel back for third person.</div><div class="prop-row"><label>Camera height</label><input type="number" step="0.1" min="-1" max="2" value="' + camH + '" onchange="setPlayerCamHeight(parseFloat(this.value) || 0)" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;"></div><div style="font-size:11px;color:#888;margin-bottom:6px;">Its camera is the 🎥 Camera object in the Hierarchy — select it to move or rotate the camera. Drag it back for third person, or right up to the eyes for first person (scroll the wheel all the way in).</div><button class="btn btn-action" style="margin-right:6px;" onclick="resetPlayerCamera()">🎥 Reset camera</button><button class="btn btn-danger" onclick="unsetPlayer()">Remove as player</button>' : '<div style="font-size:11px;color:#888;margin-bottom:6px;">Hook this object up as the player. A camera will follow behind it in Preview and downloads — the mouse turns it, and the wheel pulls back for third person.</div><button class="btn btn-action" onclick="setSelectedAsPlayer()">Set as player</button>'}
       ` : '';
       const wd = selectedObject.userData.watchData || { title: 'My Watch', buttons: [] };
       const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -1975,6 +2533,7 @@
       const isEnemy = selectedObject.userData.primitiveType === 'enemy';
       const eCfg = selectedObject.userData.enemy || { speed: 2, sight: 'look' };
       const eSight = ['ignore', 'look', 'blind', 'notice'].indexOf(eCfg.sight) !== -1 ? eCfg.sight : 'look';
+      const eProj = ['none', 'fireball', 'cork', 'gun'].indexOf(eCfg.projectile) !== -1 ? eCfg.projectile : 'none';
       const enemySection = isEnemy ? `
         <div class="section-header">👾 Enemy</div>
         <div class="prop-row"><label>Chase speed</label>
@@ -1994,7 +2553,20 @@
         <div class="prop-row"><label>Health bar</label>
           <input type="checkbox" ${eCfg.showHealthBar ? 'checked' : ''} onchange="setEnemyHealthBar(this.checked)">
         </div>
-        <div style="font-size:11px;color:#888;">Notice works like Baldman: it only chases once it has line of sight, and gives up after 5s unseen. Touching the player costs 10 HP in every mode. A thrown object hitting it costs 25 HP.</div>
+        <div class="prop-row"><label>Model</label>
+          ${eCfg.glbData
+            ? '<span style="font-size:11px;color:#4ec9b0;flex:1;">✓ Custom GLB model</span><button class="btn btn-action" onclick="document.getElementById(\'enemyGlbInput\').click()">Set Enemy</button> <button class="btn btn-danger" onclick="removeEnemyModel()">Remove model</button>'
+            : '<span style="font-size:11px;color:#888;flex:1;">Red sphere (default)</span><button class="btn btn-action" onclick="document.getElementById(\'enemyGlbInput\').click()">📦 Set Enemy</button>'}
+        </div>
+        <div class="prop-row"><label>Projectile</label>
+          <select onchange="setEnemyProjectile(this.value)" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+            <option value="none" ${eProj === 'none' ? 'selected' : ''}>None</option>
+            <option value="fireball" ${eProj === 'fireball' ? 'selected' : ''}>🔥 Fireball</option>
+            <option value="cork" ${eProj === 'cork' ? 'selected' : ''}>🍾 Cork</option>
+            <option value="gun" ${eProj === 'gun' ? 'selected' : ''}>🔫 Gun</option>
+          </select>
+        </div>
+        <div style="font-size:11px;color:#888;">Notice works like Baldman: it only chases once it has line of sight, and gives up after 5s unseen. Touching the player costs 10 HP in every mode. A thrown object hitting it costs 25 HP. With a projectile set, it also shoots at you every 2s while it can see you (within ~15 units) — a hit costs 10 HP. Gun gives it a visible gun model.</div>
       ` : '';
       // ---- Feature 8: menu ----
       const isMenu = selectedObject.userData.primitiveType === 'menu';
@@ -2072,9 +2644,60 @@
         </div>
         <div style="font-size:11px;color:#888;">Falls with gravity in Preview &amp; downloads, lands on the ground and blocks, and bounces.</div>` : '<div style="font-size:11px;color:#888;">Tick Dynamic to make this object fall, land and bounce in Preview &amp; downloads.</div>'}
       ` : '';
+      // ---- Set Center (GLB pivot) ----
+      const centerSection = isGLBBacked(selectedObject) ? `
+        <div class="section-header">🎯 Center</div>
+        <div style="font-size:11px;color:#888;margin-bottom:6px;">${selectedObject.userData.centerShift ? 'This model\'s pivot is at its middle (centered) — it rotates around its middle.' : 'This model\'s pivot is where its author put it (usually its feet). Set Center moves the pivot to the middle of the model so it rotates around its middle, not its feet.'}</div>
+        ${selectedObject.userData.centerShift
+          ? '<button class="btn btn-action" onclick="resetCenter()">Reset Center</button>'
+          : '<button class="btn btn-action" onclick="setCenter()">🎯 Set Center</button>'}
+      ` : '';
+
+      // The Camera object gets its own small inspector: transform + a note.
+      const isCameraObj = selectedObject.userData.primitiveType === 'camera';
+      if (isCameraObj) {
+        panel.innerHTML = `
+        <div class="prop-row"><label>Name</label><input type="text" id="inpName" value="${selectedObject.name}" onchange="selectedObject.name=this.value; updateHierarchy();"></div>
+        <div class="prop-row"><label>Visible</label><input type="checkbox" ${selectedObject.userData.visible !== false ? 'checked' : ''} onchange="setObjectVisible(this.checked)"></div>
+
+        <div class="section-header">Position</div>
+        <div class="prop-row"><label>X / Y / Z</label>
+          <div class="vec3-inputs">
+            <input type="number" step="0.1" id="posX" oninput="applyInspectorValues()">
+            <input type="number" step="0.1" id="posY" oninput="applyInspectorValues()">
+            <input type="number" step="0.1" id="posZ" oninput="applyInspectorValues()">
+          </div>
+        </div>
+
+        <div class="section-header">Rotation (Degrees)</div>
+        <div class="prop-row"><label>X / Y / Z</label>
+          <div class="vec3-inputs">
+            <input type="number" step="1" id="rotX" oninput="applyInspectorValues()">
+            <input type="number" step="1" id="rotY" oninput="applyInspectorValues()">
+            <input type="number" step="1" id="rotZ" oninput="applyInspectorValues()">
+          </div>
+        </div>
+
+        <div class="section-header">Scale</div>
+        <div class="prop-row"><label>X / Y / Z</label>
+          <div class="vec3-inputs">
+            <input type="number" step="0.1" id="sclX" oninput="applyInspectorValues()">
+            <input type="number" step="0.1" id="sclY" oninput="applyInspectorValues()">
+            <input type="number" step="0.1" id="sclZ" oninput="applyInspectorValues()">
+          </div>
+        </div>
+
+        <div class="section-header">🎥 Camera</div>
+        <div style="font-size:11px;color:#888;margin-bottom:6px;">This is the player's camera. Move it with the Move tool (or drag it in the viewport) and rotate it with the Rotate tool. In Preview and downloads, the game camera sits where you put it — drag it back for third person, or put it right at the player's eyes for first person. The wheel still zooms it in and out. Deleting this object resets the camera to its default spot.</div>
+        <button class="btn btn-action" onclick="resetPlayerCamera()">Reset camera to default</button>
+      `;
+        updateInspectorValues();
+        return;
+      }
 
       panel.innerHTML = `
         <div class="prop-row"><label>Name</label><input type="text" id="inpName" value="${selectedObject.name}" onchange="selectedObject.name=this.value; updateHierarchy();"></div>
+        <div class="prop-row"><label>Visible</label><input type="checkbox" ${selectedObject.userData.visible !== false ? 'checked' : ''} onchange="setObjectVisible(this.checked)"><span style="font-size:11px;color:#888;flex:1;">Untick to hide it in Preview &amp; downloads. It still works (a hidden light still lights, a hidden enemy still chases). In the editor it shows faded.</span></div>
         
         <div class="section-header">Position</div>
         <div class="prop-row"><label>X / Y / Z</label>
@@ -2114,6 +2737,7 @@
         ${soundSection}
         ${grabSection}
         ${dynamicSection}
+        ${centerSection}
         ${playerSection}
         ${pixelSection}
         ${watchSection}
@@ -2331,6 +2955,7 @@
         parseFloat(document.getElementById('sclY').value) || 1,
         parseFloat(document.getElementById('sclZ').value) || 1
       );
+      syncCamAfterTransform();
       if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
     }
 
