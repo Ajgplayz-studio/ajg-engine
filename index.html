@@ -2291,6 +2291,7 @@
     var collabIncoming = [];         // pending requests addressed to me
     var collabRequestsById = {};     // pushId -> request record
     var collabPushTimer = null;
+    var collabAcceptWatchRef = null; // RTDB ref watching my sent request turn 'accepted'
     var applyingRemoteScene = false; // true while a remote scene is being applied (stops echo loops)
 
     function escHtml(s) {
@@ -2516,6 +2517,26 @@
           if (msg) { msg.style.color = '#ef4444'; msg.textContent = 'Request failed to send: ' + ((err && err.message) || 'denied'); }
         });
       }
+      // Option B: watch my sent request — join the live session only when
+      // they accept it (status flips to 'accepted'). Declined (or deleted)
+      // just stops the watch; nothing joins.
+      stopWatchingCollabAccept();
+      var watchId = sentRef && sentRef.key;
+      if (watchId) {
+        collabAcceptWatchRef = fbGamesDb.ref('engineCollab/requests/' + watchId);
+        collabAcceptWatchRef.on('value', function (snap) {
+          var v = snap.val();
+          if (!v) { stopWatchingCollabAccept(); return; }
+          if (v.status === 'accepted') {
+            stopWatchingCollabAccept();
+            if (msg) { msg.style.color = '#4ec9b0'; msg.textContent = toAddress + ' accepted — live collab started!'; }
+            startCollabSession(v.projectId || currentProjectId, toAddress);
+          } else if (v.status === 'declined') {
+            stopWatchingCollabAccept();
+            if (msg) { msg.style.color = '#ef4444'; msg.textContent = toAddress + ' declined the request.'; }
+          }
+        });
+      }
     }
 
     function acceptCollabRequest(id) {
@@ -2565,7 +2586,14 @@
       pushCollabScene();
     }
 
+    // Stop watching a sent request for acceptance (Option B join trigger).
+    function stopWatchingCollabAccept() {
+      if (collabAcceptWatchRef && collabAcceptWatchRef.off) collabAcceptWatchRef.off();
+      collabAcceptWatchRef = null;
+    }
+
     function leaveCollabSession() {
+      stopWatchingCollabAccept();
       if (collabSessionRef && collabSessionRef.off) collabSessionRef.off();
       collabSessionRef = null;
       collabSession = null;
