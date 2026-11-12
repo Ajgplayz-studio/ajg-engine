@@ -142,6 +142,8 @@
     <button class="btn" onclick="addPrimitive('menu')">📋 + Menu</button>
     <button class="btn" onclick="addPrimitive('spawnpoint')">📍 + Spawn Point</button>
     <button class="btn" onclick="addPrimitive('watch')">⌚ + Watch</button>
+    <button class="btn" onclick="addPrimitive('freecam')">🎥 + Free Camera</button>
+    <button class="btn" onclick="addPrimitive('animation')">🎬 + Animation</button>
     <button class="btn" onclick="openPixelArt()">🎨 Art</button>
 
     <div style="height:16px; width:1px; background:#444;"></div>
@@ -199,7 +201,23 @@
         <div class="blocks-palette" id="blocksPalette"></div>
         <textarea id="codeEditor" spellcheck="false" oninput="onCodeEditorInput(this.value)" placeholder="// Type JavaScript here, or click the blocks on the left"></textarea>
       </div>
-      <div class="code-foot">Runs in Preview &amp; downloads · onStart · onUpdate(dt) · key("KeyW") · getObject(name) · getSteps() · onClick(name,fn) · moveObject(name,x,y,z) · setObjectPos(name,x,y,z) · after(sec,fn) · repeat(n,fn) · say(text) · playSound("coin"|"jump"|"explosion"|"click") · playMusic("cheerful"|"calm") · stopMusic()</div>
+      <div class="code-foot">Runs in Preview &amp; downloads · onStart · onUpdate(dt) · key("KeyW") · getObject(name) · getSteps() · onClick(name,fn) · moveObject(name,x,y,z) · setObjectPos(name,x,y,z) · after(sec,fn) · repeat(n,fn) · say(text) · playSound("coin"|"jump"|"explosion"|"click") · playMusic("cheerful"|"calm") · stopMusic() · setPlayerMode("Free Camera_1", true|false) · getPlayerMode("Free Camera_1") · playAnimation("Animation_1") · stopAnimation("Animation_1")</div>
+    </div>
+  </div>
+
+  <!-- 🎬 Animation editor modal (Rec Room-style keyframe editor) -->
+  <div id="anim-modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10001;align-items:center;justify-content:center;">
+    <div style="background:#252526;border:1px solid #007acc;border-radius:10px;width:min(560px,94vw);max-height:88vh;overflow-y:auto;padding:16px;box-shadow:0 20px 60px rgba(0,0,0,.8);">
+      <div style="display:flex;align-items:center;gap:10px;font-weight:bold;color:#007acc;font-size:15px;"><span id="animEditTitle">🎬 Edit Animation</span><span style="flex:1"></span><button class="btn" onclick="closeAnimEditor()">✕ Close</button></div>
+      <div style="font-size:11px;color:#888;margin-top:4px;">Keyframes capture the current position, rotation and scale of every connected target. Play previews it in the editor — targets go back to where they were when you stop.</div>
+      <div class="section-header">Keyframes</div>
+      <div id="animEditKeys" style="font-size:12px;color:#aaa;">No keyframes yet.</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;">
+        <button class="btn btn-action" onclick="addAnimObjKeyframe()">＋ Add keyframe at current transform</button>
+        <button class="btn btn-action" id="animPreviewBtn" onclick="playAnimPreview()">▶ Play preview</button>
+        <button class="btn" onclick="stopAnimPreview()">⏹ Stop</button>
+      </div>
+      <div class="prop-row" style="margin-top:10px;"><label>Loop</label><input type="checkbox" id="animEditLoop" onchange="setAnimObjLoop(this.checked)"></div>
     </div>
   </div>
 
@@ -399,6 +417,9 @@
         while (hitObj.parent && hitObj.parent !== scene && gameObjects.includes(hitObj.parent)) {
           hitObj = hitObj.parent;
         }
+        // 🔗 Connect mode: clicking an object toggles it as a target of
+        // the Animation being connected — no selection, no terrain paint.
+        if (animConnectMode) { animToggleTarget(animConnectMode, hitObj); updateInspector(); return; }
         // Shift-click adds to the multi-selection (for Merge); a plain
         // click replaces the selection.
         if (event.shiftKey) toggleMultiSelect(hitObj);
@@ -425,10 +446,271 @@
       if (terrainPainting) { terrainPainting = false; terrainPaintTarget = null; orbit.enabled = true; }
     });
 
+    // ---- 🎥 Free Camera + 🎬 Animation system ----
+    // A spawnable Free Camera is a REAL top-level object (primitiveType
+    // 'freecam'), separate from the player-follow Camera object
+    // (primitiveType 'camera', isPlayerCamera, stored as item.camObj on
+    // the player). The freecam is never a solid, never grabbable, never
+    // the player mesh. An Animation object (primitiveType 'animation') is
+    // the only way to animate a freecam — the old per-object Animation
+    // keyframes section does not apply to freecams or animations.
+    var animConnectMode = null;   // the Animation object being connected, or null
+    var animEditTarget = null;    // the Animation object open in the edit modal
+    var animPreview = null;       // { anim, saved, start, timer } while previewing in the editor
+    function defaultFreecam() { return { playerMode: true }; }
+    function defaultAnimObj() { return { targets: [], keyframes: [], loop: true, trigger: 'start', triggerTarget: null }; }
+    function ensureFreecam(obj) {
+      if (!obj.userData.freecam) obj.userData.freecam = defaultFreecam();
+      else if (obj.userData.freecam.playerMode === undefined) obj.userData.freecam.playerMode = true;
+      return obj.userData.freecam;
+    }
+    function ensureAnimObj(obj) {
+      var a = obj.userData.animObj;
+      if (!a) { a = defaultAnimObj(); obj.userData.animObj = a; }
+      if (!Array.isArray(a.targets)) a.targets = [];
+      if (!Array.isArray(a.keyframes)) a.keyframes = [];
+      if (a.loop === undefined) a.loop = true;
+      if (a.trigger !== 'start' && a.trigger !== 'touch') a.trigger = 'start';
+      return a;
+    }
+    function findFreecam() {
+      for (var i = 0; i < gameObjects.length; i++) {
+        if (gameObjects[i].userData && gameObjects[i].userData.primitiveType === 'freecam') return gameObjects[i];
+      }
+      return null;
+    }
+    function findObjectByName(name) {
+      for (var i = 0; i < gameObjects.length; i++) if (gameObjects[i].name === name) return gameObjects[i];
+      return null;
+    }
+    function animationsTargeting(name) {
+      var out = [];
+      gameObjects.forEach(function (o) {
+        if (o.userData && o.userData.primitiveType === 'animation' && o.userData.animObj && (o.userData.animObj.targets || []).indexOf(name) !== -1) out.push(o);
+      });
+      return out;
+    }
+    // Targets an Animation may connect to: anything movable, except other
+    // Animations, the player Camera object, menus, watches and spawn
+    // points (they have no in-game mesh to animate).
+    function isAnimConnectable(obj) {
+      if (!obj || !obj.userData) return false;
+      var t = obj.userData.primitiveType;
+      return ['animation', 'camera', 'menu', 'watch', 'spawnpoint'].indexOf(t) === -1;
+    }
+    function animToggleTarget(animObj, targetObj) {
+      if (!animObj || !targetObj || animObj === targetObj) return false;
+      if (!isAnimConnectable(targetObj)) return false;
+      var a = ensureAnimObj(animObj);
+      var i = a.targets.indexOf(targetObj.name);
+      if (i === -1) a.targets.push(targetObj.name); else a.targets.splice(i, 1);
+      if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
+      return true;
+    }
+    function addAnimTarget(name) {
+      if (!selectedObject || !name) return;
+      var t = findObjectByName(name);
+      if (t) animToggleTarget(selectedObject, t);
+      updateInspector();
+    }
+    function removeAnimTarget(name) {
+      if (!selectedObject) return;
+      var a = ensureAnimObj(selectedObject);
+      var i = a.targets.indexOf(name);
+      if (i !== -1) a.targets.splice(i, 1);
+      updateInspector();
+      if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
+    }
+    function toggleAnimConnect() {
+      if (!selectedObject || selectedObject.userData.primitiveType !== 'animation') return;
+      animConnectMode = (animConnectMode === selectedObject) ? null : selectedObject;
+      updateInspector();
+    }
+    function setAnimTrigger(v) {
+      if (!selectedObject) return;
+      var a = ensureAnimObj(selectedObject);
+      a.trigger = (v === 'touch') ? 'touch' : 'start';
+      if (a.trigger === 'touch' && !a.triggerTarget && a.targets.length) a.triggerTarget = a.targets[0];
+      updateInspector();
+      if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
+    }
+    function setAnimTriggerTarget(name) {
+      if (!selectedObject) return;
+      ensureAnimObj(selectedObject).triggerTarget = name || null;
+      if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
+    }
+    function setAnimObjLoop(on) {
+      if (!selectedObject) return;
+      ensureAnimObj(selectedObject).loop = !!on;
+      var cb = (typeof document !== 'undefined' && document.getElementById) ? document.getElementById('animEditLoop') : null;
+      if (cb) cb.checked = !!on;
+      if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
+    }
+    // Pure pose interpolation for one Animation object at time t (seconds).
+    // Returns { name: {pos, rot, scale} } or null when it has no keyframes.
+    function animObjPoseAt(animObj, t) {
+      var a = animObj && animObj.userData ? animObj.userData.animObj : animObj;
+      if (!a || !a.keyframes || !a.keyframes.length) return null;
+      var kf = a.keyframes;
+      var dur = kf[kf.length - 1].t;
+      var tt = a.loop ? (dur > 0 ? (t % dur) : 0) : Math.min(t, dur);
+      var k0 = kf[0], k1 = kf[kf.length - 1];
+      for (var j = 0; j < kf.length - 1; j++) {
+        if (tt >= kf[j].t && tt <= kf[j + 1].t) { k0 = kf[j]; k1 = kf[j + 1]; break; }
+      }
+      var span = (k1.t - k0.t) || 1;
+      var f = Math.max(0, Math.min(1, (tt - k0.t) / span));
+      function lerpArr(x, y) { return [x[0] + (y[0] - x[0]) * f, x[1] + (y[1] - x[1]) * f, x[2] + (y[2] - x[2]) * f]; }
+      var out = {};
+      Object.keys(k0.poses || {}).forEach(function (n) {
+        if (!k1.poses || !k1.poses[n]) return;
+        out[n] = { pos: lerpArr(k0.poses[n].pos, k1.poses[n].pos), rot: lerpArr(k0.poses[n].rot, k1.poses[n].rot), scale: lerpArr(k0.poses[n].scale, k1.poses[n].scale) };
+      });
+      return out;
+    }
+    function addAnimObjKeyframe() {
+      var anim = animEditTarget || selectedObject;
+      if (!anim || anim.userData.primitiveType !== 'animation') return;
+      var a = ensureAnimObj(anim);
+      var t = a.keyframes.length ? a.keyframes[a.keyframes.length - 1].t + 1 : 0;
+      var poses = {};
+      a.targets.forEach(function (name) {
+        var o = findObjectByName(name);
+        if (!o) return;
+        poses[name] = { pos: o.position.toArray(), rot: [o.rotation.x, o.rotation.y, o.rotation.z], scale: o.scale.toArray() };
+      });
+      a.keyframes.push({ t: t, poses: poses });
+      renderAnimEditKeys();
+      updateInspector();
+      if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
+    }
+    function delAnimObjKeyframe(i) {
+      var anim = animEditTarget || selectedObject;
+      if (!anim) return;
+      var a = ensureAnimObj(anim);
+      a.keyframes.splice(i, 1);
+      renderAnimEditKeys();
+      updateInspector();
+      if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
+    }
+    function setAnimObjKeyframeTime(i, v) {
+      var anim = animEditTarget || selectedObject;
+      if (!anim) return;
+      var a = ensureAnimObj(anim);
+      if (a.keyframes[i]) a.keyframes[i].t = Math.max(0, v || 0);
+    }
+    function renderAnimEditKeys() {
+      var box = (typeof document !== 'undefined' && document.getElementById) ? document.getElementById('animEditKeys') : null;
+      if (!box || !animEditTarget) return;
+      var a = ensureAnimObj(animEditTarget);
+      if (!a.keyframes.length) { box.innerHTML = 'No keyframes yet — add one below.'; return; }
+      box.innerHTML = a.keyframes.map(function (k, i) {
+        return '<div class="prop-row"><label>Key ' + (i + 1) + ' @</label>'
+          + '<input type="number" step="0.1" min="0" value="' + k.t + '" onchange="setAnimObjKeyframeTime(' + i + ', parseFloat(this.value) || 0)" style="width:60px;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">'
+          + '<span style="font-size:11px;color:#888;">s · ' + Object.keys(k.poses || {}).length + ' target(s)</span>'
+          + '<button class="btn btn-danger" onclick="delAnimObjKeyframe(' + i + ')">✕</button></div>';
+      }).join('');
+    }
+    function openAnimEditor() {
+      if (!selectedObject || selectedObject.userData.primitiveType !== 'animation') return;
+      animEditTarget = selectedObject;
+      var ov = (typeof document !== 'undefined' && document.getElementById) ? document.getElementById('anim-modal-overlay') : null;
+      if (ov) {
+        var tt = document.getElementById('animEditTitle');
+        if (tt) tt.textContent = '🎬 Edit Animation — ' + selectedObject.name;
+        var cb = document.getElementById('animEditLoop');
+        if (cb) cb.checked = !!ensureAnimObj(selectedObject).loop;
+        ov.style.display = 'flex';
+      }
+      renderAnimEditKeys();
+    }
+    function closeAnimEditor() {
+      stopAnimPreview();
+      animEditTarget = null;
+      var ov = (typeof document !== 'undefined' && document.getElementById) ? document.getElementById('anim-modal-overlay') : null;
+      if (ov) ov.style.display = 'none';
+    }
+    function playAnimPreview() {
+      var anim = animEditTarget || selectedObject;
+      if (!anim || anim.userData.primitiveType !== 'animation') return;
+      stopAnimPreview();
+      var a = ensureAnimObj(anim);
+      if (!a.keyframes.length) return;
+      var saved = {};
+      a.targets.forEach(function (name) {
+        var o = findObjectByName(name);
+        if (o) saved[name] = { pos: o.position.toArray(), rot: [o.rotation.x, o.rotation.y, o.rotation.z], scale: o.scale.toArray() };
+      });
+      animPreview = { anim: anim, saved: saved, start: Date.now() };
+      var step = function () {
+        if (!animPreview || animPreview.anim !== anim) return;
+        var poses = animObjPoseAt(anim, (Date.now() - animPreview.start) / 1000);
+        if (poses) Object.keys(poses).forEach(function (name) {
+          var o = findObjectByName(name);
+          if (!o) return;
+          o.position.set(poses[name].pos[0], poses[name].pos[1], poses[name].pos[2]);
+          o.rotation.set(poses[name].rot[0], poses[name].rot[1], poses[name].rot[2]);
+          o.scale.set(poses[name].scale[0], poses[name].scale[1], poses[name].scale[2]);
+        });
+      };
+      animPreview.step = step;
+      if (typeof setInterval === 'function') animPreview.timer = setInterval(step, 50);
+    }
+    function stopAnimPreview() {
+      if (!animPreview) return;
+      if (animPreview.timer && typeof clearInterval === 'function') clearInterval(animPreview.timer);
+      Object.keys(animPreview.saved || {}).forEach(function (name) {
+        var o = findObjectByName(name);
+        var sv = animPreview.saved[name];
+        if (o && sv) {
+          o.position.set(sv.pos[0], sv.pos[1], sv.pos[2]);
+          o.rotation.set(sv.rot[0], sv.rot[1], sv.rot[2]);
+          o.scale.set(sv.scale[0], sv.scale[1], sv.scale[2]);
+        }
+      });
+      animPreview = null;
+    }
+    // Editor-side code API (same names as the in-game code API). In the
+    // editor, play/stopAnimation run the edit-mode preview of that
+    // Animation object; setPlayerMode just flips the freecam's flag.
+    function getPlayerMode(name) {
+      var o = findObjectByName(name);
+      if (!o || o.userData.primitiveType !== 'freecam') return false;
+      return !!ensureFreecam(o).playerMode;
+    }
+    function setPlayerMode(name, onOff) {
+      var o = findObjectByName(name);
+      if (!o || o.userData.primitiveType !== 'freecam') return false;
+      ensureFreecam(o).playerMode = !!onOff;
+      updateInspector();
+      if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
+      return true;
+    }
+    function playAnimation(name) {
+      var o = findObjectByName(name);
+      if (!o || o.userData.primitiveType !== 'animation') return false;
+      animEditTarget = o;
+      playAnimPreview();
+      return true;
+    }
+    function stopAnimation(name) {
+      if (name) {
+        var o = findObjectByName(name);
+        if (animPreview && (!o || animPreview.anim === o)) stopAnimPreview();
+      } else stopAnimPreview();
+      return true;
+    }
+    function setFreecamPlayerMode(on) {
+      if (!selectedObject || selectedObject.userData.primitiveType !== 'freecam') return;
+      ensureFreecam(selectedObject).playerMode = !!on;
+      updateInspector();
+      if (typeof scheduleCollabPush === 'function') scheduleCollabPush();
+    }
+
     function addPrimitive(type, customData = null) {
       let mesh;
       const typeName = customData ? customData.type : type;
-      const name = customData ? customData.name : `${typeName}_${gameObjects.length + 1}`;
+      const name = customData ? customData.name : (typeName === 'freecam' ? `Free Camera_${gameObjects.length + 1}` : typeName === 'animation' ? `Animation_${gameObjects.length + 1}` : `${typeName}_${gameObjects.length + 1}`);
 
       if (typeName === 'cube') {
         const geo = new THREE.BoxGeometry(1, 1, 1);
@@ -578,6 +860,40 @@
         mesh.userData.enemyColor = customData ? customData.color : 0xcc2222;
         buildDefaultEnemyLook(mesh);
         mesh.position.set(0, 0, 0);
+      } else if (typeName === 'freecam') {
+        // 🎥 Free Camera: a real top-level object you can move/rotate and
+        // animate. Editor-visible marker only (box + lens); in Preview /
+        // exports it has no mesh and is never a solid or grabbable.
+        mesh = new THREE.Group();
+        var fc = (customData && customData.freecam) ? customData.freecam : {};
+        mesh.userData.freecam = { playerMode: fc.playerMode !== undefined ? !!fc.playerMode : true };
+        var fbody = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.35, 0.22), new THREE.MeshStandardMaterial({ color: 0x222233, roughness: 0.4 }));
+        mesh.add(fbody);
+        var flens = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, 0.18, 16), new THREE.MeshStandardMaterial({ color: 0x007acc, emissive: 0x007acc, emissiveIntensity: 0.6, roughness: 0.3 }));
+        flens.rotation.x = Math.PI / 2;
+        flens.position.set(0, 0, -0.18);
+        mesh.add(flens);
+        mesh.position.set(0, 1.65, 0);
+      } else if (typeName === 'animation') {
+        // 🎬 Animation object: the gate for animations. Editor-visible
+        // clapper-ish marker; in Preview / exports it has no mesh at all.
+        mesh = new THREE.Group();
+        var ao = (customData && customData.animObj) ? customData.animObj : {};
+        mesh.userData.animObj = {
+          targets: Array.isArray(ao.targets) ? ao.targets.slice() : [],
+          keyframes: Array.isArray(ao.keyframes) ? JSON.parse(JSON.stringify(ao.keyframes)) : [],
+          loop: ao.loop !== undefined ? !!ao.loop : true,
+          trigger: (ao.trigger === 'touch') ? 'touch' : 'start',
+          triggerTarget: ao.triggerTarget || null
+        };
+        var abox = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.45, 0.1), new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.5 }));
+        abox.position.y = 0.22;
+        mesh.add(abox);
+        var aslat = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.1, 0.1), new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 }));
+        aslat.position.set(0, 0.5, 0);
+        aslat.rotation.z = 0.25;
+        mesh.add(aslat);
+        mesh.position.set(0, 1, 0);
       } else if (typeName === 'merged') {
         // A merged group: one hierarchy entry that moves as one. Its parts
         // are rebuilt below (after the common transform block) from
@@ -640,6 +956,17 @@
       // Feature 3/5/7: per-object animation, sound trigger and physics flag
       // ride along in .ajg saves and are restored on load.
       if (customData && customData.anim) mesh.userData.anim = JSON.parse(JSON.stringify(customData.anim));
+      if (customData && customData.freecam) mesh.userData.freecam = { playerMode: customData.freecam.playerMode !== undefined ? !!customData.freecam.playerMode : true };
+      if (customData && customData.animObj) {
+        var _ao = customData.animObj;
+        mesh.userData.animObj = {
+          targets: Array.isArray(_ao.targets) ? _ao.targets.slice() : [],
+          keyframes: Array.isArray(_ao.keyframes) ? JSON.parse(JSON.stringify(_ao.keyframes)) : [],
+          loop: _ao.loop !== undefined ? !!_ao.loop : true,
+          trigger: (_ao.trigger === 'touch') ? 'touch' : 'start',
+          triggerTarget: _ao.triggerTarget || null
+        };
+      }
       if (customData && customData.code) {
         mesh.userData.objCode = JSON.parse(JSON.stringify(customData.code));
         // Old saves used onCollide — it is now onPlayerCollide.
@@ -716,6 +1043,8 @@
         if (obj.userData.enemy) item.enemy = JSON.parse(JSON.stringify(obj.userData.enemy));
         if (obj.userData.menu) item.menu = JSON.parse(JSON.stringify(obj.userData.menu));
         if (obj.userData.anim) item.anim = JSON.parse(JSON.stringify(obj.userData.anim));
+        if (obj.userData.freecam) item.freecam = JSON.parse(JSON.stringify(obj.userData.freecam));
+        if (obj.userData.animObj) item.animObj = JSON.parse(JSON.stringify(obj.userData.animObj));
         // Per-object code: only events that actually have code are saved.
         if (obj.userData.objCode) {
           const oc = {};
@@ -1497,7 +1826,7 @@
         'sun.position.set(20,30,10);sun.castShadow=true;',
         'scene.add(sun);',
         ...(showGrid ? ['scene.add(new THREE.GridHelper(60,60,0xffffff,0xbbbbbb));'] : []),
-        'var solids=[];var clickTargets=[];var terrains=[];var enemies=[];var particleSystems=[];var dynamics=[];var animated=[];var soundObjs=[];var objCodeObjs=[];var grabList=[];var grabHeld=null;var grabDir=new THREE.Vector3();var projectiles=[];',
+        'var solids=[];var clickTargets=[];var terrains=[];var enemies=[];var particleSystems=[];var dynamics=[];var animated=[];var soundObjs=[];var objCodeObjs=[];var grabList=[];var grabHeld=null;var grabDir=new THREE.Vector3();var projectiles=[];var freecams=[];var runtimeAnims=[];var activeFreecam=null;var freecamConnected=false;var freecamPlayerMode=true;var freecamPitch=0;',
         'var hp=100;var gameTime=0;var spawnX=0,spawnY=0.1,spawnZ=6,spawnYaw=0;',
         'function updateHP(){var h=document.getElementById("hpcount");if(h)h.textContent=hp;}',
         'function die(){say("You died! Respawning...");hp=100;updateHP();pos.set(spawnX,Math.max(spawnY,0.1),spawnZ);vel.set(0,0,0);yaw=spawnYaw;orbYaw=spawnYaw;}',
@@ -1521,6 +1850,16 @@
         'function throwHeld(){releaseHeld(true);}',
         'function losClear(ax,ay,az,bx,by,bz){var dx=bx-ax,dy=by-ay,dz=bz-az;for(var i=0;i<solids.length;i++){var b=solids[i];var t0=0,t1=1,hit=true,ta,tb,tmp;if(Math.abs(dx)<1e-9){if(ax<b.x0||ax>b.x1)hit=false;}else{ta=(b.x0-ax)/dx;tb=(b.x1-ax)/dx;if(ta>tb){tmp=ta;ta=tb;tb=tmp;}if(ta>t0)t0=ta;if(tb<t1)t1=tb;if(t0>t1)hit=false;}if(hit){if(Math.abs(dy)<1e-9){if(ay<b.y0||ay>b.y1)hit=false;}else{ta=(b.y0-ay)/dy;tb=(b.y1-ay)/dy;if(ta>tb){tmp=ta;ta=tb;tb=tmp;}if(ta>t0)t0=ta;if(tb<t1)t1=tb;if(t0>t1)hit=false;}}if(hit){if(Math.abs(dz)<1e-9){if(az<b.z0||az>b.z1)hit=false;}else{ta=(b.z0-az)/dz;tb=(b.z1-az)/dz;if(ta>tb){tmp=ta;ta=tb;tb=tmp;}if(ta>t0)t0=ta;if(tb<t1)t1=tb;if(t0>t1)hit=false;}}if(hit)return false;}var len=Math.sqrt(dx*dx+dy*dy+dz*dz);var steps=Math.max(1,Math.ceil(len/0.5));for(var s=1;s<steps;s++){var f=s/steps;var x=ax+dx*f,y=ay+dy*f,z=az+dz*f;for(var j=0;j<terrains.length;j++){var th=terrainHeightAt(terrains[j],x,z);if(th!==null&&th>y+0.1)return false;}}return true;}',
         'function terrainHeightAt(t,x,z){var seg=t.seg;var lx=(x-t.x)/t.sx;var ly=(t.z-z)/t.sy;var gx=(lx/20+0.5)*seg;var gz=(0.5-ly/20)*seg;if(gx<0||gz<0||gx>seg||gz>seg)return null;var x0=Math.floor(gx),z0=Math.floor(gz);var x1=Math.min(x0+1,seg),z1=Math.min(z0+1,seg);var fx=gx-x0,fz=gz-z0;var H=t.heights;function hv(ix,iz){return H[iz*(seg+1)+ix];}var h=(hv(x0,z0)*(1-fx)+hv(x1,z0)*fx)*(1-fz)+(hv(x0,z1)*(1-fx)+hv(x1,z1)*fx)*fz;return t.y+h*t.sz;}',
+        'function animPoseAt(a,t){var kf=a.data.keyframes||[];if(!kf.length)return null;var dur=kf[kf.length-1].t;var tt=a.data.loop?(dur>0?(t%dur):0):Math.min(t,dur);var k0=kf[0],k1=kf[kf.length-1];for(var j=0;j<kf.length-1;j++){if(tt>=kf[j].t&&tt<=kf[j+1].t){k0=kf[j];k1=kf[j+1];break;}}var span=(k1.t-k0.t)||1;var f=Math.max(0,Math.min(1,(tt-k0.t)/span));var out={};for(var n in k0.poses){if(!k1.poses||!k1.poses[n])continue;out[n]={pos:lerpArr(k0.poses[n].pos,k1.poses[n].pos,f),rot:lerpArr(k0.poses[n].rot,k1.poses[n].rot,f),scale:lerpArr(k0.poses[n].scale,k1.poses[n].scale,f)};}return out;}',
+        'function startRuntimeAnim(a){if(!a)return false;a.playing=true;a.t=0;a.started=true;if(!a.targets.length)a.targets=(a.data.targets||[]).map(function(n){return {name:n,o:scene.getObjectByName(n)};}).filter(function(x){return !!x.o;});return true;}',
+        'function stopRuntimeAnim(a){if(!a)return false;a.playing=false;return true;}',
+        'function playAnimation(name){for(var i=0;i<runtimeAnims.length;i++){if(runtimeAnims[i].name===name)return startRuntimeAnim(runtimeAnims[i]);}return false;}',
+        'function stopAnimation(name){for(var i=0;i<runtimeAnims.length;i++){if(runtimeAnims[i].name===name)return stopRuntimeAnim(runtimeAnims[i]);}return false;}',
+        'function getPlayerMode(name){for(var i=0;i<freecams.length;i++){if(freecams[i].name===name)return freecams[i].playerMode!==false;}return false;}',
+        'function setPlayerMode(name,onOff){for(var i=0;i<freecams.length;i++){if(freecams[i].name===name){freecams[i].playerMode=!!onOff;if(activeFreecam&&activeFreecam.name===name)freecamPlayerMode=!!onOff;return true;}}return false;}',
+        'function startGameAnims(){for(var i=0;i<runtimeAnims.length;i++){var a=runtimeAnims[i];if(a.data.trigger==="start"&&!a.started)startRuntimeAnim(a);}}',
+        'function checkAnimTouchTriggers(){for(var i=0;i<runtimeAnims.length;i++){var a=runtimeAnims[i];if(a.data.trigger!=="touch")continue;var tn=a.data.triggerTarget||(a.data.targets&&a.data.targets[0]);var to=tn?scene.getObjectByName(tn):null;if(!to){a.touchInside=false;continue;}var b=new THREE.Box3().setFromObject(to);var inside=(pos.x>=b.min.x-R&&pos.x<=b.max.x+R&&pos.z>=b.min.z-R&&pos.z<=b.max.z+R&&pos.y+1.6>=b.min.y&&pos.y<=b.max.y);if(inside&&!a.touchInside){a.touchInside=true;startRuntimeAnim(a);}else if(!inside){a.touchInside=false;}}}',
+        'function updateRuntimeAnims(dt){for(var i=0;i<runtimeAnims.length;i++){var a=runtimeAnims[i];if(!a.playing)continue;a.t+=dt;var poses=animPoseAt(a,a.t);if(poses){for(var j=0;j<a.targets.length;j++){var tg=a.targets[j];var p=poses[tg.name];if(!p)continue;if(activeFreecam&&tg.name===activeFreecam.name){if(freecamPlayerMode)continue;pos.set(p.pos[0],Math.max(p.pos[1]-1.65,0),p.pos[2]);yaw=p.rot[1]||0;freecamPitch=p.rot[0]||0;continue;}tg.o.position.set(p.pos[0],p.pos[1],p.pos[2]);tg.o.rotation.set(p.rot[0],p.rot[1],p.rot[2]);tg.o.scale.set(p.scale[0],p.scale[1],p.scale[2]);}}if(!a.data.loop&&a.data.keyframes&&a.data.keyframes.length&&a.t>=a.data.keyframes[a.data.keyframes.length-1].t)a.playing=false;}}',
         'function updateAnims(){for(var i=0;i<animated.length;i++){var a=animated[i];if(a.o===playerMesh)continue;var kf=a.anim.keyframes;if(!kf||!kf.length)continue;var dur=kf[kf.length-1].t;var t=a.anim.loop?(dur>0?(gameTime%dur):0):Math.min(gameTime,dur);var k0=kf[0],k1=kf[kf.length-1];for(var j=0;j<kf.length-1;j++){if(t>=kf[j].t&&t<=kf[j+1].t){k0=kf[j];k1=kf[j+1];break;}}var span=(k1.t-k0.t)||1;var f=Math.max(0,Math.min(1,(t-k0.t)/span));var p=lerpArr(k0.pos,k1.pos,f),r=lerpArr(k0.rot,k1.rot,f),s=lerpArr(k0.scale,k1.scale,f);a.o.position.set(p[0],p[1],p[2]);a.o.rotation.set(r[0],r[1],r[2]);a.o.scale.set(s[0],s[1],s[2]);}}',
         'function updateDynamics(dt){for(var i=0;i<dynamics.length;i++){var d=dynamics[i];var o=d.o;d.vel.y-=22*dt;o.position.x+=d.vel.x*dt;o.position.z+=d.vel.z*dt;var ny=o.position.y+d.vel.y*dt;var bottom=ny-d.bottomOff;var g=supportAtR(o.position.x,o.position.z,bottom+1,d.half);if(bottom<=g){ny=g+d.bottomOff;if(d.vel.y<-1)d.vel.y=-d.vel.y*d.rest;else d.vel.y=0;d.grounded=true;}else d.grounded=false;o.position.y=ny;var ob=new THREE.Box3().setFromObject(o);for(var s=0;s<solids.length;s++){var b=solids[s];if(ob.max.x>b.x0&&ob.min.x<b.x1&&ob.max.z>b.z0&&ob.min.z<b.z1&&ob.min.y<b.y1-0.05&&ob.max.y>b.y0){if(d.vel.y<=0&&ob.min.y>=b.y1-0.6){o.position.y=b.y1+d.bottomOff;if(d.vel.y<-1)d.vel.y=-d.vel.y*d.rest;else d.vel.y=0;d.grounded=true;}else{var oxl=ob.max.x-b.x0,oxr=b.x1-ob.min.x,ozl=ob.max.z-b.z0,ozr=b.z1-ob.min.z;var m=Math.min(oxl,oxr,ozl,ozr);if(m===oxl){o.position.x-=oxl;d.vel.x=-d.vel.x*d.rest*0.5;}else if(m===oxr){o.position.x+=oxr;d.vel.x=-d.vel.x*d.rest*0.5;}else if(m===ozl){o.position.z-=ozl;d.vel.z=-d.vel.z*d.rest*0.5;}else{o.position.z+=ozr;d.vel.z=-d.vel.z*d.rest*0.5;}ob=new THREE.Box3().setFromObject(o);}}}var hsp=Math.sqrt(d.vel.x*d.vel.x+d.vel.y*d.vel.y+d.vel.z*d.vel.z);if(hsp>3){var hb=new THREE.Box3().setFromObject(o);for(var ei=0;ei<enemies.length;ei++){var ee=enemies[ei];if(ee.mesh.hp<=0)continue;var eb2=new THREE.Box3().setFromObject(ee.mesh);if(hb.intersectsBox(eb2)){damageEnemy(ee,25);d.vel.x*=0.4;d.vel.y*=0.4;d.vel.z*=0.4;break;}}}if(d.grounded&&d.isSphere){var hs=Math.sqrt(d.vel.x*d.vel.x+d.vel.z*d.vel.z);if(hs>0.01){var ax=new THREE.Vector3(d.vel.z/hs,0,-d.vel.x/hs);o.rotateOnWorldAxis(ax,hs*dt/Math.max(0.1,d.radius));}}}}',
         'function drawEnemyBar(e){var r=Math.max(0,Math.min(1,e.mesh.hp/e.maxHp));if(Math.abs(r-e.barRatio)<0.01)return;e.barRatio=r;var c=e.barCtx;if(!c)return;c.clearRect(0,0,128,16);c.fillStyle="rgba(0,0,0,0.65)";c.fillRect(0,0,128,16);c.fillStyle=r>0.5?"#22c55e":(r>0.25?"#eab308":"#ef4444");c.fillRect(2,2,124*r,12);if(e.barTex)e.barTex.needsUpdate=true;}',
@@ -1554,6 +1893,8 @@
         'else if(it.type==="pixelart"&&it.pixelArt){o=new THREE.Mesh(new THREE.PlaneGeometry(2,2),new THREE.MeshStandardMaterial({map:pixelTex(it.pixelArt),transparent:true,side:THREE.DoubleSide,roughness:.7}));}',
         'else if(it.type==="watch"){return;}',
         'else if(it.type==="menu"){return;}',
+        'else if(it.type==="freecam"){freecams.push({name:it.name,pos:it.position.slice(),rot:it.rotation.slice(),playerMode:!(it.freecam&&it.freecam.playerMode===false)});return;}',
+        'else if(it.type==="animation"){runtimeAnims.push({name:it.name,data:it.animObj||{targets:[],keyframes:[],loop:true,trigger:"start",triggerTarget:null},targets:[],playing:false,t:0,started:false,touchInside:false});return;}',
         'else if(it.type==="particle"){var pcfg=it.particle||{rate:10,lifetime:2,size:0.2,color:"#ffaa00",spread:0.5,gravity:-2};var psys=makeParticleSystem({position:new THREE.Vector3(it.position[0],it.position[1],it.position[2])},pcfg);particleSystems.push(psys);if(it.visible===false)psys.pts.visible=false;var pm=new THREE.Mesh(new THREE.SphereGeometry(0.15,12,12),new THREE.MeshStandardMaterial({color:pcfg.color,emissive:pcfg.color,emissiveIntensity:0.9}));pm.position.set(it.position[0],it.position[1],it.position[2]);if(it.visible===false)pm.visible=false;scene.add(pm);pm.userData.clickName=it.name;clickTargets.push(pm);if(it.sound)soundObjs.push({o:pm,name:it.name,preset:it.sound.preset||"coin",trigger:migTrigger(it.sound.trigger),cd:0});registerObjCode(it,pm);return;}',
         'else if(it.type==="pointlight"){var lcf=it.light||{color:"#ffffff",intensity:1,distance:10};var pl2=new THREE.PointLight(lcf.color,lcf.intensity,lcf.distance);pl2.position.set(it.position[0],it.position[1],it.position[2]);scene.add(pl2);var lm=new THREE.Mesh(new THREE.SphereGeometry(0.14,12,12),new THREE.MeshStandardMaterial({color:lcf.color,emissive:lcf.color,emissiveIntensity:1}));lm.position.set(it.position[0],it.position[1],it.position[2]);if(it.visible===false)lm.visible=false;scene.add(lm);lm.userData.clickName=it.name;clickTargets.push(lm);registerExtras(it,lm);return;}',
         'else if(it.type==="spotlight"){var scf=it.light||{color:"#ffffff",intensity:1,distance:15,angle:0.5};var sl2=new THREE.SpotLight(scf.color,scf.intensity,scf.distance,scf.angle||0.5,0.5);sl2.position.set(it.position[0],it.position[1],it.position[2]);var stg=new THREE.Object3D();stg.position.set(it.position[0],it.position[1]-1,it.position[2]);scene.add(stg);sl2.target=stg;scene.add(sl2);var sm=new THREE.Mesh(new THREE.SphereGeometry(0.14,12,12),new THREE.MeshStandardMaterial({color:scf.color,emissive:scf.color,emissiveIntensity:1}));sm.position.set(it.position[0],it.position[1],it.position[2]);if(it.visible===false)sm.visible=false;scene.add(sm);sm.userData.clickName=it.name;clickTargets.push(sm);registerExtras(it,sm);return;}',
@@ -1575,18 +1916,20 @@
         'o.castShadow=true;o.receiveShadow=true;',
         'if(it.pixelArt){if(it.type==="cube"){var _fa=it.pixelArt.faceArt||null;var _pf=_fa?["right","left","top","bottom","front","back"].filter(function(fn){return _fa[fn];}):((it.pixelArt.faces&&it.pixelArt.faces.length)?it.pixelArt.faces:["right","left","top","bottom","front","back"]);var _fo=["right","left","top","bottom","front","back"];var _tx=pixelTex(it.pixelArt);o.material=_fo.map(function(fn){var _ft=(_fa&&_fa[fn])?pixelTex(_fa[fn]):_tx;return _pf.indexOf(fn)!==-1?new THREE.MeshStandardMaterial({map:_ft,transparent:true,roughness:.7,color:0xffffff}):new THREE.MeshStandardMaterial({color:it.color,roughness:.7});});}else{o.material.map=pixelTex(it.pixelArt);o.material.color.set(0xffffff);o.material.transparent=true;o.material.needsUpdate=true;}}',
         'scene.add(o);if(it.visible===false)o.visible=false;if(it.isPlayer){playerMesh=o;setPlayerDims(o);camHeight=(it.camHeight!==undefined)?it.camHeight:0;playerHidden=(it.visible===false);loadCamObj(it);}else if(!it.dynamic)regBox(o);o.userData.clickName=it.name;clickTargets.push(o);registerExtras(it,o);regGrab(o,it);});',
+        'if(freecams.length){activeFreecam=freecams[0];freecamPlayerMode=activeFreecam.playerMode!==false;freecamConnected=runtimeAnims.some(function(a){return (a.data.targets||[]).indexOf(activeFreecam.name)!==-1;});}',
         'var R=0.45;if(playerMesh)R=Math.max(0.45,playerHalfD);',
         'var pos=new THREE.Vector3(0,0,6),vel=new THREE.Vector3(),yaw=0,pitch=0,grounded=false,orbYaw=0,orbPitch=0,orbDist=5;',
         '(function(){var sx=0,sz=6,sy=0.1;if(spawnPt){sx=spawnPt.position[0];sz=spawnPt.position[2];sy=spawnPt.position[1];yaw=spawnPt.rotation[1]||0;}else if(playerMesh){sx=playerMesh.position.x;sz=playerMesh.position.z;sy=playerMesh.position.y-playerFootOff;}var g=supportAt(sx,sz,sy+1.0);pos.set(sx,Math.max(sy+0.05,g),sz);spawnX=sx;spawnY=pos.y;spawnZ=sz;spawnYaw=yaw;orbYaw=yaw;})();',
+        'if(activeFreecam){var fx=activeFreecam.pos[0],fz=activeFreecam.pos[2];var fy=activeFreecam.pos[1]-1.65;if(spawnPt){fx=spawnPt.position[0];fz=spawnPt.position[2];}var gg=supportAt(fx,fz,fy+1.0);pos.set(fx,Math.max(fy+0.05,gg),fz);spawnX=fx;spawnY=pos.y;spawnZ=fz;spawnYaw=activeFreecam.rot[1]||0;yaw=spawnYaw;orbYaw=spawnYaw;freecamPitch=activeFreecam.rot[0]||0;}',
         'var keys={};',
         'addEventListener("keydown",function(e){keys[e.code]=true;if(e.code==="Space")e.preventDefault();});',
         'addEventListener("keyup",function(e){keys[e.code]=false;});',
         'var locked=false;',
-        'document.getElementById("ui").addEventListener("click",function(){var p=renderer.domElement.requestPointerLock();if(p&&p.catch)p.catch(function(){document.getElementById("ui").style.display="flex";});});',
+        'document.getElementById("ui").addEventListener("click",function(){startGameAnims();var p=renderer.domElement.requestPointerLock();if(p&&p.catch)p.catch(function(){document.getElementById("ui").style.display="flex";});});',
         'document.addEventListener("pointerlockchange",function(){locked=document.pointerLockElement===renderer.domElement;if(!locked&&grabHeld)dropHeld();document.getElementById("ui").style.display=locked?"none":"flex";});',
         'document.addEventListener("pointerlockerror",function(){document.getElementById("ui").style.display="flex";});',
-        'document.addEventListener("mousemove",function(e){if(!locked)return;if(playerMesh){orbYaw-=e.movementX*0.0022;orbPitch-=e.movementY*0.0022;orbPitch=Math.max(-0.4,Math.min(0.4,orbPitch));}else{yaw-=e.movementX*0.0022;pitch-=e.movementY*0.0022;pitch=Math.max(-1.45,Math.min(1.45,pitch));}});',
-        'document.addEventListener("wheel",function(e){if(!playerMesh)return;orbDist=Math.max(0,Math.min(10,orbDist+e.deltaY*0.01));});',
+        'document.addEventListener("mousemove",function(e){if(!locked)return;if(activeFreecam){yaw-=e.movementX*0.0022;pitch-=e.movementY*0.0022;pitch=Math.max(-1.45,Math.min(1.45,pitch));}else if(playerMesh){orbYaw-=e.movementX*0.0022;orbPitch-=e.movementY*0.0022;orbPitch=Math.max(-0.4,Math.min(0.4,orbPitch));}else{yaw-=e.movementX*0.0022;pitch-=e.movementY*0.0022;pitch=Math.max(-1.45,Math.min(1.45,pitch));}});',
+        'document.addEventListener("wheel",function(e){if(!playerMesh||activeFreecam)return;orbDist=Math.max(0,Math.min(10,orbDist+e.deltaY*0.01));});',
         'addEventListener("resize",function(){camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});',
         'function supportAtR(x,z,fy,rad){var s=0;for(var i=0;i<solids.length;i++){var b=solids[i];if(x>b.x0-rad&&x<b.x1+rad&&z>b.z0-rad&&z<b.z1+rad&&b.y1<=fy+0.55&&b.y1>s)s=b.y1;}for(var j=0;j<terrains.length;j++){var th=terrainHeightAt(terrains[j],x,z);if(th!==null&&th<=fy+0.55&&th>s)s=th;}return s;}',
         'function supportAt(x,z,fy){return supportAtR(x,z,fy,R);}',
@@ -1607,12 +1950,12 @@
         'function moveObject(n,x,y,z){var o=getObject(n);if(o){o.position.x+=x;o.position.y+=y;o.position.z+=z;}}',
         'function setObjectPos(n,x,y,z){var o=getObject(n);if(o){o.position.set(x,y,z);}}',
         'function say(t){var b=document.getElementById("saybox");b.textContent=t;b.style.display="block";clearTimeout(b._h);b._h=setTimeout(function(){b.style.display="none";},2600);}',
-        'function runUserCode(code){try{(new Function("onStart","onUpdate","after","repeat","key","getObject","getSteps","onClick","moveObject","setObjectPos","say","playSound","playMusic","stopMusic","scene","camera",code))(onStart,onUpdate,after,repeat,key,getObject,getSteps,onClick,moveObject,setObjectPos,say,playSound,playMusic,stopMusic,scene,camera);}catch(e){say("Code error: "+e.message);}}',
-        'function runObjCode(code,me,dt,other){try{(new Function("me","dt","other","after","repeat","key","getObject","getSteps","onClick","moveObject","setObjectPos","say","playSound","playMusic","stopMusic","scene","camera",code))(me,dt,other,after,repeat,key,getObject,getSteps,onClick,moveObject,setObjectPos,say,playSound,playMusic,stopMusic,scene,camera);}catch(e){say("Code error: "+e.message);}}',
+        'function runUserCode(code){try{(new Function("onStart","onUpdate","after","repeat","key","getObject","getSteps","onClick","moveObject","setObjectPos","say","playSound","playMusic","stopMusic","setPlayerMode","getPlayerMode","playAnimation","stopAnimation","scene","camera",code))(onStart,onUpdate,after,repeat,key,getObject,getSteps,onClick,moveObject,setObjectPos,say,playSound,playMusic,stopMusic,setPlayerMode,getPlayerMode,playAnimation,stopAnimation,scene,camera);}catch(e){say("Code error: "+e.message);}}',
+        'function runObjCode(code,me,dt,other){try{(new Function("me","dt","other","after","repeat","key","getObject","getSteps","onClick","moveObject","setObjectPos","say","playSound","playMusic","stopMusic","setPlayerMode","getPlayerMode","playAnimation","stopAnimation","scene","camera",code))(me,dt,other,after,repeat,key,getObject,getSteps,onClick,moveObject,setObjectPos,say,playSound,playMusic,stopMusic,setPlayerMode,getPlayerMode,playAnimation,stopAnimation,scene,camera);}catch(e){say("Code error: "+e.message);}}',
         'var USER_CODE=' + JSON.stringify(gameCode).replace(/<\//g, '<\\/') + ';',
         'var WATCHES=' + watchesJson + ';',
         'var MENUS=' + JSON.stringify(sceneData.filter(o => o.type === 'menu')).replace(/<\//g, '<\\/') + ';',
-        'if(MENUS.length){var md0=MENUS[0].menu||{title:"My Game",buttons:[]};document.getElementById("menutitle").textContent=md0.title||"My Game";var mb=document.getElementById("menubtns");mb.innerHTML="";(md0.buttons||[]).forEach(function(b){var btn=document.createElement("button");btn.textContent=b.label;btn.style.cssText="display:block;width:min(280px,80vw);margin:0 auto 12px;padding:14px;border-radius:12px;border:1px solid rgba(255,255,255,.25);background:#007acc;color:#fff;font-size:17px;font-weight:700;cursor:pointer;";if(b.action==="code"){btn.onclick=(function(code){return function(){runUserCode(code);};})(b.code||"");}else{btn.onclick=function(){document.getElementById("menuoverlay").style.display="none";var p=renderer.domElement.requestPointerLock();if(p&&p.catch)p.catch(function(){document.getElementById("ui").style.display="flex";});};}mb.appendChild(btn);});document.getElementById("menuoverlay").style.display="flex";}',
+        'if(MENUS.length){var md0=MENUS[0].menu||{title:"My Game",buttons:[]};document.getElementById("menutitle").textContent=md0.title||"My Game";var mb=document.getElementById("menubtns");mb.innerHTML="";(md0.buttons||[]).forEach(function(b){var btn=document.createElement("button");btn.textContent=b.label;btn.style.cssText="display:block;width:min(280px,80vw);margin:0 auto 12px;padding:14px;border-radius:12px;border:1px solid rgba(255,255,255,.25);background:#007acc;color:#fff;font-size:17px;font-weight:700;cursor:pointer;";if(b.action==="code"){btn.onclick=(function(code){return function(){runUserCode(code);};})(b.code||"");}else{btn.onclick=function(){startGameAnims();document.getElementById("menuoverlay").style.display="none";var p=renderer.domElement.requestPointerLock();if(p&&p.catch)p.catch(function(){document.getElementById("ui").style.display="flex";});};}mb.appendChild(btn);});document.getElementById("menuoverlay").style.display="flex";}',
         'runUserCode(USER_CODE);',
         '__sc.forEach(function(f){try{f();}catch(e){say("Code error: "+e.message);}});',
         'objCodeObjs.forEach(function(oc){if(oc.code.onStart)runObjCode(oc.code.onStart,oc.o,0);});',
@@ -1632,7 +1975,7 @@
         'function mpDisplayName(){var ni=document.getElementById("mpname");var typed=ni?ni.value.trim():"";if(typed)return typed.slice(0,20);var u=(mpAuth&&mpAuth.currentUser)?mpAuth.currentUser.email:"";if(u)return u.split("@")[0];return "Player";}',
         'function mpErr(t){var e=document.getElementById("mperr");if(e)e.textContent=t||"";}',
         'function openMpPanel(){var p=document.getElementById("mppanel");if(!p)return;mpErr("");if(!mpReady){mpErr("Multiplayer is not available — Firebase failed to load. You can still play single-player.");}var ni=document.getElementById("mpname");if(ni&&!ni.value&&mpAuth&&mpAuth.currentUser&&mpAuth.currentUser.email)ni.value=mpAuth.currentUser.email.split("@")[0];p.style.display="flex";}',
-        'function startSinglePlayer(){var u=document.getElementById("ui");if(u)u.style.display="none";var m=document.getElementById("menuoverlay");if(m)m.style.display="none";var p=renderer.domElement.requestPointerLock();if(p&&p.catch)p.catch(function(){var u2=document.getElementById("ui");if(u2)u2.style.display="flex";});}',
+        'function startSinglePlayer(){startGameAnims();var u=document.getElementById("ui");if(u)u.style.display="none";var m=document.getElementById("menuoverlay");if(m)m.style.display="none";var p=renderer.domElement.requestPointerLock();if(p&&p.catch)p.catch(function(){var u2=document.getElementById("ui");if(u2)u2.style.display="flex";});}',
         'function closeMpPanel(){var p=document.getElementById("mppanel");if(p)p.style.display="none";}',
         'function mpGenCode(){var letters="ABCDEFGHJKLMNPQRSTUVWXYZ";var c="";for(var i=0;i<6;i++)c+=letters.charAt(Math.floor(Math.random()*letters.length));return c;}',
         'function mpUpdateHud(){var info=document.getElementById("mpinfo");var code=document.getElementById("mpcode");var cnt=document.getElementById("mpcount");var lv=document.getElementById("mpleave");var jd=document.getElementById("mpjoined");if(!mpRoom){if(info)info.style.display="none";if(lv)lv.style.display="none";if(jd)jd.textContent="";return;}if(info)info.style.display="";if(code)code.textContent=mpRoomCode;if(cnt)cnt.textContent=String(1+Object.keys(mpAvatars).length);if(lv)lv.style.display="block";if(jd)jd.textContent="In room "+mpRoomCode+" — share this code with a friend!";}',
@@ -1648,10 +1991,10 @@
         'function mpCreateClicked(){var code=mpGenCode();var ci=document.getElementById("mpcodein");if(ci)ci.value=code;mpJoinRoom(code);}',
         'function mpLeaveClicked(){mpLeaveRoom(false);}',
         '(function tick(){requestAnimationFrame(tick);var dt=Math.min(pclock.getDelta(),0.05);',
-        'gameTime+=dt;mpTick();updateAnims();updateParticles(dt);updateDynamics(dt);updateEnemies(dt);updateProjectiles(dt);updateSoundCollide(dt);updateObjCollide();',
+        'gameTime+=dt;mpTick();updateAnims();updateRuntimeAnims(dt);checkAnimTouchTriggers();updateParticles(dt);updateDynamics(dt);updateEnemies(dt);updateProjectiles(dt);updateSoundCollide(dt);updateObjCollide();',
         'if(locked){',
         'camera.quaternion.setFromEuler(new THREE.Euler(pitch,yaw,0,"YXZ"));',
-        'var myaw=playerMesh?orbYaw:yaw;fwd.set(-Math.sin(myaw),0,-Math.cos(myaw));rgt.set(Math.cos(myaw),0,-Math.sin(myaw));',
+        'var myaw=activeFreecam?yaw:(playerMesh?orbYaw:yaw);fwd.set(-Math.sin(myaw),0,-Math.cos(myaw));rgt.set(Math.cos(myaw),0,-Math.sin(myaw));',
         'var sp=(keys["ShiftLeft"]||keys["ShiftRight"])?9:5.5;',
         'var ix=((keys["KeyD"]||keys["ArrowRight"])?1:0)-((keys["KeyA"]||keys["ArrowLeft"])?1:0);',
         'var iz=((keys["KeyW"]||keys["ArrowUp"])?1:0)-((keys["KeyS"]||keys["ArrowDown"])?1:0);',
@@ -1669,8 +2012,8 @@
         'if(lastPX===null){lastPX=pos.x;lastPZ=pos.z;}',
         'var sdx=pos.x-lastPX,sdz=pos.z-lastPZ;lastPX=pos.x;lastPZ=pos.z;stepAcc+=Math.sqrt(sdx*sdx+sdz*sdz);',
         'if(stepAcc>=2){stepCount+=Math.floor(stepAcc/2);stepAcc=stepAcc%2;var sc=document.getElementById("stepcount");if(sc)sc.textContent=stepCount;}',
-        'if(playerMesh){playerMesh.position.set(pos.x,pos.y+playerFootOff,pos.z);playerMesh.rotation.y=orbYaw;}',
-        'if(playerMesh){var vYaw=orbYaw+camRot[1],vPitch=orbPitch+camRot[0];var bx=pos.x+camOff[0]*Math.cos(orbYaw)+camOff[2]*Math.sin(orbYaw),bz=pos.z-camOff[0]*Math.sin(orbYaw)+camOff[2]*Math.cos(orbYaw),by=pos.y+camOff[1]+camHeight;camera.position.set(bx+Math.sin(vYaw)*orbDist,by,bz+Math.cos(vYaw)*orbDist);camera.quaternion.setFromEuler(new THREE.Euler(vPitch,vYaw,camRot[2],"YXZ"));playerMesh.visible=!playerHidden&&Math.hypot(camera.position.x-pos.x,camera.position.z-pos.z)>=0.8;}else{camera.position.set(pos.x,pos.y+1.65,pos.z);}',
+        'if(playerMesh&&!activeFreecam){playerMesh.position.set(pos.x,pos.y+playerFootOff,pos.z);playerMesh.rotation.y=orbYaw;}',
+        'if(activeFreecam){camera.position.set(pos.x,pos.y+1.65,pos.z);camera.quaternion.setFromEuler(new THREE.Euler(freecamPlayerMode?pitch:freecamPitch,yaw,0,"YXZ"));if(playerMesh)playerMesh.visible=!playerHidden;}else if(playerMesh){var vYaw=orbYaw+camRot[1],vPitch=orbPitch+camRot[0];var bx=pos.x+camOff[0]*Math.cos(orbYaw)+camOff[2]*Math.sin(orbYaw),bz=pos.z-camOff[0]*Math.sin(orbYaw)+camOff[2]*Math.cos(orbYaw),by=pos.y+camOff[1]+camHeight;camera.position.set(bx+Math.sin(vYaw)*orbDist,by,bz+Math.cos(vYaw)*orbDist);camera.quaternion.setFromEuler(new THREE.Euler(vPitch,vYaw,camRot[2],"YXZ"));playerMesh.visible=!playerHidden&&Math.hypot(camera.position.x-pos.x,camera.position.z-pos.z)>=0.8;}else{camera.position.set(pos.x,pos.y+1.65,pos.z);}',
         'if(locked&&grabHeld){camera.getWorldDirection(grabDir);grabHeld.o.position.set(camera.position.x+grabDir.x*2,camera.position.y+grabDir.y*2,camera.position.z+grabDir.z*2);}',
         'renderer.render(scene,camera);})();',
         '<\/script>',
@@ -1760,6 +2103,9 @@
 
     function setSelectedAsPlayer() {
       if (!selectedObject) return;
+      // A Free Camera, an Animation object and the player Camera object
+      // are not bodies — they can never be the player.
+      if (['freecam', 'animation', 'camera'].indexOf(selectedObject.userData.primitiveType) !== -1) { showEnginePopup('That object cannot be the player.'); return; }
       gameObjects.forEach(o => { o.userData.isPlayer = false; });
       selectedObject.userData.isPlayer = true;
       refreshPlayerCamera();
@@ -2325,9 +2671,20 @@
       transformGizmo.detach();
       var wasCamera = !!(selectedObject.userData && selectedObject.userData.isPlayerCamera);
       var wasPlayer = !!(selectedObject.userData && selectedObject.userData.isPlayer);
+      var deletedName = selectedObject.name;
       scene.remove(selectedObject);
       const idx = gameObjects.indexOf(selectedObject);
       if (idx > -1) gameObjects.splice(idx, 1);
+      // A deleted object stops being an Animation target anywhere.
+      gameObjects.forEach(function (o) {
+        if (o.userData && o.userData.animObj && Array.isArray(o.userData.animObj.targets)) {
+          var ti = o.userData.animObj.targets.indexOf(deletedName);
+          if (ti !== -1) o.userData.animObj.targets.splice(ti, 1);
+          if (o.userData.animObj.triggerTarget === deletedName) o.userData.animObj.triggerTarget = o.userData.animObj.targets[0] || null;
+        }
+      });
+      if (animConnectMode && animConnectMode.name === deletedName) animConnectMode = null;
+      if (animEditTarget && animEditTarget.name === deletedName) animEditTarget = null;
       selectedObject = null;
       multiSelected = [];
       if (wasPlayer) {
@@ -2382,10 +2739,12 @@
         if (obj.userData.primitiveType === 'enemy') icon = '👾';
         if (obj.userData.primitiveType === 'menu') icon = '📋';
         if (obj.userData.primitiveType === 'camera') icon = '🎥';
+        if (obj.userData.primitiveType === 'freecam') icon = '🎥';
+        if (obj.userData.primitiveType === 'animation') icon = '🎬';
         if (obj.userData.primitiveType === 'merged') icon = '🔗';
 
         div.innerText = `${icon} ${obj.name}${obj.userData.isPlayer ? ' 🧍' : ''}${obj.userData.visible === false ? ' (hidden)' : ''}`;
-        div.onclick = (e) => { if (e.shiftKey) toggleMultiSelect(obj); else { multiSelected = []; selectObject(obj); } };
+        div.onclick = (e) => { if (animConnectMode) { animToggleTarget(animConnectMode, obj); updateInspector(); return; } if (e.shiftKey) toggleMultiSelect(obj); else { multiSelected = []; selectObject(obj); } };
         list.appendChild(div);
       });
     }
@@ -2425,7 +2784,7 @@
       // Watches, spawn points, lights, particles, terrain, enemies and menus
       // are not playable bodies, so they cannot be the player. The Camera
       // object is not a body either.
-      const canBePlayer = ['spawnpoint', 'watch', 'particle', 'pointlight', 'spotlight', 'terrain', 'enemy', 'menu', 'camera'].indexOf(selectedObject.userData.primitiveType) === -1;
+      const canBePlayer = ['spawnpoint', 'watch', 'particle', 'pointlight', 'spotlight', 'terrain', 'enemy', 'menu', 'camera', 'freecam', 'animation'].indexOf(selectedObject.userData.primitiveType) === -1;
       const camH = (selectedObject.userData.camHeight !== undefined) ? selectedObject.userData.camHeight : 0;
       const playerSection = canBePlayer ? `
         <div class="section-header">🧍 Player</div>
@@ -2495,7 +2854,7 @@
         </div>` : ''}
       ` : '';
       // ---- Feature 3: animation ----
-      const canAnimate = ['spawnpoint', 'watch', 'menu', 'terrain'].indexOf(selectedObject.userData.primitiveType) === -1;
+      const canAnimate = ['spawnpoint', 'watch', 'menu', 'terrain', 'freecam', 'animation'].indexOf(selectedObject.userData.primitiveType) === -1;
       const anim = selectedObject.userData.anim || { loop: true, keyframes: [] };
       const animSection = canAnimate ? `
         <div class="section-header">🎬 Animation</div>
@@ -2593,6 +2952,52 @@
         <div class="prop-row"><label>Code</label></div>
         <textarea id="newMenuBtnCode" rows="3" placeholder='say("Hello!");' style="width:100%;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:6px;border-radius:2px;font-size:11px;font-family:Consolas,monospace;resize:vertical;"></textarea>
         <button class="btn btn-action" style="margin-top:6px;" onclick="addMenuButton()">+ Add button</button>
+      ` : '';
+      // ---- 🎥 Free Camera inspector ----
+      const isFreecam = selectedObject.userData.primitiveType === 'freecam';
+      const fcCfg = isFreecam ? ensureFreecam(selectedObject) : null;
+      const fcConnected = isFreecam ? animationsTargeting(selectedObject.name) : [];
+      const freecamSection = isFreecam ? `
+        <div class="section-header">🎥 Free Camera</div>
+        <div class="prop-row"><label>Player mode</label>
+          <input type="checkbox" ${fcCfg.playerMode ? 'checked' : ''} onchange="setFreecamPlayerMode(this.checked)">
+        </div>
+        <div style="font-size:11px;color:#888;margin-bottom:6px;">👤 Player mode ON: WASD moves this camera with full collision, like the player. OFF: an Animation controls it instead — zero collision, no WASD. The wheel does nothing for a Free Camera (it is already first-person at the camera).</div>
+        <div style="font-size:11px;color:#888;margin-bottom:6px;">${fcConnected.length ? '🎬 Connected to: ' + fcConnected.map(function (a) { return esc(a.name); }).join(', ') : 'Not connected to any Animation yet — with no Animation driving it, this camera just becomes the player.'}</div>
+        <div style="font-size:11px;color:#888;">This is a separate camera from the player-follow 🎥 Camera object. In Preview and downloads the FIRST Free Camera in the scene is the view camera. If a player object also exists, it is just a normal object in that case.</div>
+      ` : '';
+      // ---- 🎬 Animation object inspector ----
+      const isAnimObj = selectedObject.userData.primitiveType === 'animation';
+      const aoCfg = isAnimObj ? ensureAnimObj(selectedObject) : null;
+      const animTargetOpts = isAnimObj ? gameObjects.filter(function (o) { return isAnimConnectable(o) && o !== selectedObject && aoCfg.targets.indexOf(o.name) === -1; }) : [];
+      const animSection2 = isAnimObj ? `
+        <div class="section-header">🎬 Animation</div>
+        <div style="font-size:11px;color:#888;margin-bottom:6px;">Animations only work through this object. Connect targets, then Edit to add keyframes.</div>
+        <div style="font-size:11px;color:#aaa;margin-bottom:6px;">Targets (${aoCfg.targets.length}):</div>
+        <div id="animTargetList">${aoCfg.targets.length ? aoCfg.targets.map(function (n) { return '<div class="prop-row"><label style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(n) + '</label><button class="btn btn-danger" onclick="removeAnimTarget(\'' + n.replace(/'/g, "\\'") + '\')">✕</button></div>'; }).join('') : '<div style="font-size:11px;color:#666;margin-bottom:6px;">No targets yet — connect one below.</div>'}
+        </div>
+        <div class="prop-row"><label>Add target</label>
+          <select onchange="if (this.value) { addAnimTarget(this.value); this.value = ''; }" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+            <option value="">— pick an object —</option>
+            ${animTargetOpts.map(function (o) { return '<option value="' + esc(o.name) + '">' + esc(o.name) + '</option>'; }).join('')}
+          </select>
+        </div>
+        <button class="btn ${animConnectMode === selectedObject ? 'active' : 'btn-action'}" style="margin:6px 0;" onclick="toggleAnimConnect()">🔗 ${animConnectMode === selectedObject ? 'Connect mode: ON (click objects to add/remove them)' : '🔗 Connect mode'}</button>
+        <div class="prop-row"><label>Play when</label>
+          <select onchange="setAnimTrigger(this.value)" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+            <option value="start" ${aoCfg.trigger === 'start' ? 'selected' : ''}>▶ On game start</option>
+            <option value="touch" ${aoCfg.trigger === 'touch' ? 'selected' : ''}>👆 When player touches a cube</option>
+          </select>
+        </div>
+        ${aoCfg.trigger === 'touch' ? `<div class="prop-row"><label>Touch target</label>
+          <select onchange="setAnimTriggerTarget(this.value)" style="flex:1;background:#1e1e1e;border:1px solid #3c3c3c;color:#fff;padding:4px;border-radius:2px;font-size:11px;">
+            ${aoCfg.targets.map(function (n) { return '<option value="' + esc(n) + '" ' + (aoCfg.triggerTarget === n ? 'selected' : '') + '>' + esc(n) + '</option>'; }).join('') || '<option value="">(connect a target first)</option>'}
+          </select>
+        </div>` : ''}
+        <div class="prop-row"><label>Loop</label>
+          <input type="checkbox" ${aoCfg.loop ? 'checked' : ''} onchange="setAnimObjLoop(this.checked)">
+        </div>
+        <button class="btn btn-action" style="margin-top:6px;" onclick="openAnimEditor()">✏️ Edit animation</button>
       ` : '';
       // ---- Per-object code (any object) ----
       const oc = selectedObject.userData.objCode || {};
@@ -2727,6 +3132,8 @@
         </div>
 
         ${matSection}
+        ${freecamSection}
+        ${animSection2}
         ${particleSection}
         ${lightSection}
         ${animSection}
